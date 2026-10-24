@@ -18,9 +18,16 @@ export const MAX_MODULATIONS = 32;
 export const MAX_NAME = 60;
 /** Upper bound for an encoded share link payload (characters). */
 export const MAX_URL_PAYLOAD = 6000;
-/** Upper bound for imported JSON text (bytes). */
-export const MAX_IMPORT_BYTES = 512 * 1024;
-export const MAX_IMPORT_PRESETS = 100;
+/** Size of the user's preset library. */
+export const MAX_USER_PRESETS = 200;
+/**
+ * Upper bound for an imported JSON file (bytes), checked before the file is read. A backup of
+ * a full library of the largest presets the schema allows (32 modulations, 12 effects each)
+ * is ≈ 3.8 MB, so EXPORT ALL always restores in one file.
+ */
+export const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
+/** One file may hold a whole library. */
+export const MAX_IMPORT_PRESETS = MAX_USER_PRESETS;
 
 export interface VisualPreset {
   schema: typeof PRESET_SCHEMA;
@@ -179,8 +186,10 @@ export function presetToJson(presets: VisualPreset | VisualPreset[]): string {
   return JSON.stringify({ format: 'beatform-preset', schema: PRESET_SCHEMA, presets: list.map(strip) }, null, 2);
 }
 
+const TOO_LARGE = `FILE TOO LARGE (MAX ${MAX_IMPORT_BYTES / 2 ** 20} MB)`;
+
 export function presetsFromJson(text: string, now = Date.now()): { presets: VisualPreset[]; errors: string[] } {
-  if (text.length > MAX_IMPORT_BYTES) return { presets: [], errors: ['FILE TOO LARGE (MAX 512 KB)'] };
+  if (text.length > MAX_IMPORT_BYTES) return { presets: [], errors: [TOO_LARGE] };
   let data: unknown;
   try {
     data = JSON.parse(text);
@@ -201,6 +210,28 @@ export function presetsFromJson(text: string, now = Date.now()): { presets: Visu
   }
   if (items.length > MAX_IMPORT_PRESETS) errors.push(`ONLY THE FIRST ${MAX_IMPORT_PRESETS} PRESETS WERE IMPORTED`);
   return { presets, errors };
+}
+
+/** Import from a user-picked file: the size is checked before anything is read into memory. */
+export async function presetsFromFile(file: Pick<Blob, 'size' | 'text'>, now = Date.now()): Promise<{ presets: VisualPreset[]; errors: string[] }> {
+  if (file.size > MAX_IMPORT_BYTES) return { presets: [], errors: [TOO_LARGE] };
+  return presetsFromJson(await file.text(), now);
+}
+
+/**
+ * EXPORT ALL as one file — or, should a library ever outgrow the import limit, as several
+ * files that each import on their own.
+ */
+export function presetBackupFiles(presets: VisualPreset[], limitBytes = MAX_IMPORT_BYTES): string[] {
+  const whole = presetToJson(presets);
+  if (whole.length <= limitBytes || presets.length <= 1) return [whole];
+  const half = Math.ceil(presets.length / 2);
+  return [...presetBackupFiles(presets.slice(0, half), limitBytes), ...presetBackupFiles(presets.slice(half), limitBytes)];
+}
+
+/** Content of a preset without its identity, to recognise one that is already in a library. */
+export function presetFingerprint(p: VisualPreset): string {
+  return JSON.stringify([p.name, p.sceneId, presetValues(p), p.modulations, p.post]);
 }
 
 // ---- share links ---------------------------------------------------------------------------

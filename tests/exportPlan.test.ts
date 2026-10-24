@@ -186,14 +186,14 @@ describe('offline analysis for exports', () => {
     expect(compared).toBe(checks.length);
   });
 
-  function renderAnalysis(fps: number, start: number, end: number): Float32Array {
+  function renderAnalysis(fps: number, start: number, end: number, map = eventMap): Float32Array {
     const ring = new PcmRing(SR * 8);
     const analyser = new PcmAnalyser(ring, SR, 2048);
     const ve = virtualEngine(analyser);
     const hub = new AnalysisHub();
     hub.setExportMode(true);
     hub.attach(ve.engine);
-    hub.setEventMap(eventMap);
+    hub.setEventMap(map);
     // feed in uneven chunks, as a decoder would
     const from = Math.round(preRollStart(start) * SR);
     for (let i = from, k = 0; i < Math.round(end * SR) + SR; k++) {
@@ -233,5 +233,77 @@ describe('offline analysis for exports', () => {
     const expected = pattern.kicks.filter((k) => k >= start && k < 12.9).map((k) => k - start);
     expect(kickFrames.length).toBe(expected.length);
     expected.forEach((t, i) => expect(Math.abs(kickFrames[i] / fps - t)).toBeLessThanOrEqual(1 / fps));
+  });
+});
+
+describe('ranges on very short tracks', () => {
+  it('never extends a range past the end of a track shorter than the minimum length', () => {
+    const r = clampRange(0, 28, 0.3);
+    expect(r.start).toBe(0);
+    expect(r.end).toBe(0.3);
+  });
+});
+
+describe('export analysis — events on the first frame', () => {
+  const SR = 48000;
+  const pattern = synthesizeTestPattern(SR, 120);
+  function kicksOnFrames(start: number, times: number[], fps = 30) {
+    const ring = new PcmRing(SR * 8);
+    const ve = virtualEngine(new PcmAnalyser(ring, SR, 2048));
+    const hub = new AnalysisHub();
+    hub.setExportMode(true);
+    hub.attach(ve.engine);
+    ring.write(0, pattern.samples);
+    hub.setEventMap({ times: new Float32Array(times), strengths: new Float32Array(times.length).fill(1), types: new Uint8Array(times.length) });
+    const pre = Math.round((start - preRollStart(start)) * fps);
+    const counts: number[] = [];
+    let now = 1000;
+    for (let n = -pre; n < 10; n++) {
+      ve.setTime(analysisTime(frameTime(start, n, fps), fps));
+      now += 1000 / fps;
+      hub.tick(now);
+      if (n >= 0) counts.push(hub.frame.counts[0]);
+    }
+    return counts;
+  }
+
+  it('an export from 0 shows the event at 0 on its first frame', () => {
+    expect(kicksOnFrames(0, [0, 1])[0]).toBe(1);
+  });
+
+  it('an export from a later start shows an event at that start on its first frame, once', () => {
+    const c = kicksOnFrames(5, [3, 5, 6]);
+    // the event at 3 s fired during the pre-roll; the one at 5 s exactly on frame 0
+    expect(c[0]).toBe(2);
+    expect(c.at(-1)).toBe(2);
+  });
+});
+
+describe('export range across track changes', () => {
+  it('long track → segment → short track: the selection follows the new track', async () => {
+    const { rangeForTrack, exportRange } = await import('../src/export/plan');
+    // a 28 s track: the default selection, then the user picks 10–20 s
+    let range = rangeForTrack({ start: 0, end: 0 }, false, 28);
+    expect(range).toEqual({ start: 0, end: 28 });
+    range = { start: 10, end: 20 };
+    // the same track reports its duration again (metadata update): the choice is kept
+    expect(rangeForTrack(range, true, 28)).toEqual({ start: 10, end: 20 });
+    // a 1 s track is loaded: the selection resets to what that track has
+    range = rangeForTrack(range, false, 1);
+    expect(range).toEqual({ start: 0, end: 1 });
+    expect(exportRange(range.start, range.end, 1)).toEqual({ start: 0, end: 1 });
+  });
+
+  it('the export job is clamped even if the UI still holds a stale range', async () => {
+    const { exportRange } = await import('../src/export/plan');
+    expect(exportRange(10, 28, 1)).toEqual({ start: 0.5, end: 1 });
+    expect(exportRange(0, 28, 0.2)).toEqual({ start: 0, end: 0.2 });
+    expect(exportRange(0, 5, 0)).toBeNull();
+    expect(exportRange(Number.NaN, Number.NaN, 4)).toEqual({ start: 0, end: 4 });
+  });
+
+  it('a long track keeps the 30 s default selection', async () => {
+    const { rangeForTrack } = await import('../src/export/plan');
+    expect(rangeForTrack({ start: 0, end: 0 }, false, 240)).toEqual({ start: 0, end: 30 });
   });
 });

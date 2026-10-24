@@ -8,11 +8,18 @@ const MAX_STEP = 0.35;
  * wait. Larger backward jumps without an explicit reset are treated as seeks.
  */
 const MAX_WAIT_BACK = 0.5;
+/**
+ * A reset to (essentially) 0 is a start from the top — first play, loop restart, seek to the
+ * beginning, an export from 0 — so an event at exactly 0 is still ahead and fires once. Any
+ * other reset is a seek: events up to and including the new position count as skipped.
+ */
+const TRACK_START = 1e-4;
 
 /**
  * Plays back a pre-computed event map against the real playback position. Only events in
- * (previous time, current time] fire, and any discontinuity (seek, loop restart, a tab that
- * was in the background) just moves the cursor without firing what was skipped.
+ * (previous time, current time] fire — plus an event at exactly 0 when playing from the top —
+ * and any discontinuity (seek, a tab that was in the background) just moves the cursor
+ * without firing what was skipped.
  */
 export class EventScheduler {
   private map: EventMap | null = null;
@@ -28,10 +35,10 @@ export class EventScheduler {
     this.reset(time);
   }
 
-  /** Move the cursor to `time` without firing anything. */
+  /** Move the cursor to `time` without firing anything (see TRACK_START for time 0). */
   reset(time: number): void {
     this.lastTime = time;
-    this.cursor = this.map ? lowerBoundAfter(this.map.times, time) : 0;
+    this.cursor = !this.map || time <= TRACK_START ? 0 : lowerBoundAfter(this.map.times, time);
   }
 
   /**
@@ -49,11 +56,10 @@ export class EventScheduler {
     if (step <= 0) return 0;
     let fired = 0;
     const { times, types, strengths } = map;
+    // the cursor always points at the first event that has not fired yet
     while (this.cursor < times.length && times[this.cursor] <= time) {
-      if (times[this.cursor] > this.lastTime) {
-        fire(types[this.cursor] as EventTypeId, strengths[this.cursor], times[this.cursor]);
-        fired++;
-      }
+      fire(types[this.cursor] as EventTypeId, strengths[this.cursor], times[this.cursor]);
+      fired++;
       this.cursor++;
     }
     this.lastTime = time;

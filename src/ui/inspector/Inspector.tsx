@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getSceneSchema, PARAM_GROUPS } from '../../engine/params';
-import { EFFECT_MAP, EFFECTS, fxTarget, type EffectType } from '../../engine/post/effects';
+import { EFFECT_MAP, EFFECTS, effectStatus, fxTarget, MAX_TRAILS, type EffectType } from '../../engine/post/effects';
 import { getScene } from '../../engine/scenes/registry';
 import { useSettings } from '../../state/settings';
 import { useUi, type InspectorTab } from '../../state/ui';
@@ -87,7 +87,11 @@ function FxTab() {
   const performance = useSettings((s) => s.performance);
   const degraded = useRuntime((s) => s.degraded);
   const budget = liveProfile(performance, degraded).maxEffects;
-  const enabled = post.filter((e) => e.enabled);
+  const status = effectStatus(post, budget);
+  const states = [...status.values()];
+  const active = states.filter((x) => x === 'active').length;
+  const overBudget = states.includes('budget');
+  const bypassedTrails = states.filter((x) => x === 'trails-limit').length;
   void sceneId;
 
   return (
@@ -110,13 +114,15 @@ function FxTab() {
         </select>
       </div>
       <p className="set-note dim">
-        STACK RUNS TOP → BOTTOM. {enabled.length > budget ? `QUALITY BUDGET: ONLY THE FIRST ${budget} ENABLED EFFECTS RENDER (${performance.toUpperCase()}).` : `${enabled.length} / ${budget} EFFECT SLOTS IN USE.`} EFFECTS ARE ALSO RENDERED INTO EXPORTED VIDEO.
+        STACK RUNS TOP → BOTTOM. {overBudget ? `QUALITY BUDGET: ONLY THE FIRST ${budget} ENABLED EFFECTS RENDER (${performance.toUpperCase()}).` : `${active} / ${budget} EFFECT SLOTS IN USE.`} EFFECTS ARE ALSO RENDERED INTO EXPORTED VIDEO.
+        {bypassedTrails > 0 ? ` AT MOST ${MAX_TRAILS} MOTION TRAILS RENDER (EACH KEEPS ITS OWN FULL-SIZE HISTORY); ${bypassedTrails} BYPASSED.` : ''}
       </p>
       {post.length === 0 && <p className="dossier-empty dim">NO EFFECTS. ADD BLOOM, TRAILS, KALEIDOSCOPE…</p>}
       <ol className="fx-stack">
         {post.map((e, i) => {
           const def = EFFECT_MAP.get(e.type)!;
-          const skipped = e.enabled && enabled.indexOf(e) >= budget;
+          const st = status.get(e.id);
+          const skipped = st === 'budget' || st === 'trails-limit';
           return (
             <li key={e.id} className={`fx-item ${e.enabled ? '' : 'is-off'} ${skipped ? 'is-skipped' : ''}`}>
               <div className="fx-head">
@@ -135,7 +141,8 @@ function FxTab() {
                   ✕
                 </button>
               </div>
-              {skipped && <p className="set-note">SKIPPED BY THE QUALITY BUDGET</p>}
+              {st === 'budget' && <p className="set-note">SKIPPED BY THE QUALITY BUDGET</p>}
+              {st === 'trails-limit' && <p className="set-note">BYPASSED — AT MOST {MAX_TRAILS} MOTION TRAILS RENDER. REMOVE OR DISABLE ANOTHER ONE TO USE THIS.</p>}
               {e.enabled &&
                 def.params.map((d) => {
                   const target = fxTarget(e.id, d.key);

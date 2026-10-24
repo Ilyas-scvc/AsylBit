@@ -22,7 +22,8 @@ if (import.meta.env.DEV) {
     import('./export/capabilities'),
     import('./export/plan'),
     import('./visual/liveEngine'),
-  ]).then(([controller, hub, player, settings, runtime, exporter, exportState, visual, ui, studio, capabilities, plan, live]) => {
+    import('./dev/exportChecks'),
+  ]).then(([controller, hub, player, settings, runtime, exporter, exportState, visual, ui, studio, capabilities, plan, live, checks]) => {
     (window as unknown as Record<string, unknown>).__beatform = {
       controller,
       hub: hub.analysisHub,
@@ -37,6 +38,7 @@ if (import.meta.env.DEV) {
       capabilities,
       plan,
       liveEngine: live.getLiveEngine,
+      checks,
     };
   });
 }

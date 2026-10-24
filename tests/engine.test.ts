@@ -206,3 +206,63 @@ describe('post-processing stack', () => {
     expect(budgetedEffects(stack, 2).map((e) => e.id)).toEqual(['a', 'c']);
   });
 });
+
+describe('per-effect post state', () => {
+  it('two kaleidoscopes keep independent spin angles', async () => {
+    const { EffectStates } = await import('../src/engine/post/effectState');
+    const spins = new EffectStates(() => ({ angle: 0 }));
+    const stack = [
+      { id: 'a', spin: 10 },
+      { id: 'b', spin: -10 },
+    ];
+    const seen: number[] = [];
+    for (let frame = 0; frame < 2; frame++) {
+      for (const e of stack) {
+        const s = spins.get(e.id);
+        s.angle += e.spin; // one second per frame
+        seen.push(s.angle);
+      }
+    }
+    expect(seen).toEqual([10, -10, 20, -20]);
+  });
+
+  it('releases the state of effects that were removed or stopped rendering, keeps it across reordering', async () => {
+    const { EffectStates } = await import('../src/engine/post/effectState');
+    const released: string[] = [];
+    const store = new EffectStates((id) => ({ id }), (s) => released.push(s.id));
+    store.get('t1');
+    store.get('t2');
+    const first = store.get('t1');
+    store.retain(new Set(['t2', 't1'])); // reordered: nothing released
+    expect(store.get('t1')).toBe(first);
+    store.retain(new Set(['t2'])); // t1 removed / disabled
+    expect(released).toEqual(['t1']);
+    expect(store.has('t1')).toBe(false);
+    store.clear();
+    expect(released).toEqual(['t1', 't2']);
+    expect(store.size).toBe(0);
+  });
+
+  it('renders at most MAX_TRAILS motion trails and reports the rest as bypassed', async () => {
+    const { MAX_TRAILS, effectStatus } = await import('../src/engine/post/effects');
+    const stack = [createEffect('trails', 't1'), createEffect('bloom', 'b'), createEffect('trails', 't2'), createEffect('trails', 't3'), { ...createEffect('trails', 't4'), enabled: false }];
+    const status = effectStatus(stack, 8);
+    expect(MAX_TRAILS).toBe(2);
+    expect([...status.entries()]).toEqual([
+      ['t1', 'active'],
+      ['b', 'active'],
+      ['t2', 'active'],
+      ['t3', 'trails-limit'],
+      ['t4', 'off'],
+    ]);
+    expect(budgetedEffects(stack, 8).map((e) => e.id)).toEqual(['t1', 'b', 't2']);
+    // a stored / imported stack with many trails stays intact — only rendering is limited
+    expect(sanitizeStack(stack).map((e) => e.id)).toEqual(['t1', 'b', 't2', 't3', 't4']);
+  });
+
+  it('the quality budget and the trails limit combine top to bottom', async () => {
+    const { effectStatus } = await import('../src/engine/post/effects');
+    const stack = [createEffect('grain', 'g'), createEffect('trails', 't1'), createEffect('vignette', 'v'), createEffect('trails', 't2')];
+    expect([...effectStatus(stack, 3).values()]).toEqual(['active', 'active', 'active', 'budget']);
+  });
+});

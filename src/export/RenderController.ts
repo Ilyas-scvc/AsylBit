@@ -15,6 +15,11 @@
  * paced only by encoder backpressure (never by playback or requestAnimationFrame), so a
  * slow GPU makes the export take longer but never drops frames. A fixed pre-roll before
  * `start` warms up the analysis and the scene state deterministically.
+ *
+ * Output goes through a sink (sinks.ts): in memory with the real size counted as it is
+ * written, or into a file that is committed only after everything succeeded. Cancel is
+ * honoured up to that commit — including during finalization — so "cancelled" always means
+ * nothing was saved.
  */
 import { AnalysisHub } from '../audio/analysis/AnalysisHub';
 import type { EventMap } from '../audio/dsp/events';
@@ -22,6 +27,7 @@ import { VisualizerEngine, type VisualSnapshot } from '../engine/VisualizerEngin
 import type { QualityProfile } from '../engine/types';
 import { AAC_POLYFILL_PRIMING_FRAMES, aacPolyfillActive, loadMediabunny } from './capabilities';
 import { ExportCancelledError } from './errors';
+import { MemoryFileSink, type TransactionalFileSink } from './sinks';
 import { PcmAnalyser, PcmRing, virtualEngine } from './PcmAnalyser';
 import {
   analysisTime,
@@ -44,10 +50,13 @@ export interface RenderJob {
   fftSize: number;
   reducedMotion: boolean;
   /** stream straight to a file (File System Access API) instead of memory */
-  writable?: FileSystemWritableFileStream;
+  disk?: TransactionalFileSink;
+  /** in-memory size limit (bytes); defaults to MAX_IN_MEMORY_BYTES */
+  memoryLimitBytes?: number;
 }
 
-export type RenderPhase = 'preparing' | 'prerolling' | 'rendering' | 'finalizing';
+/** 'saving' = committing the finished file to disk: the one step that cannot be cancelled. */
+export type RenderPhase = 'preparing' | 'prerolling' | 'rendering' | 'finalizing' | 'saving';
 
 export interface RenderProgress {
   phase: RenderPhase;
@@ -166,101 +175,113 @@ export class RenderController {
   async run(): Promise<RenderResult> {
     const { spec, visual } = this.job;
     const signal = this.abort.signal;
+    const disk = this.job.disk ?? null;
+    const memory = disk ? null : new MemoryFileSink(this.job.memoryLimitBytes ?? MAX_IN_MEMORY_BYTES);
     const t0 = performance.now();
-    const mb = await loadMediabunny();
     const fps = spec.fps;
     const total = frameCount(spec.start, spec.end, fps);
     const preStart = preRollStart(spec.start);
     const preFrames = Math.round((spec.start - preStart) * fps);
-    const report = (phase: RenderPhase, frame: number, bytes: number) => {
+    const written = () => (disk ? disk.bytes : (memory?.size ?? 0));
+    const report = (phase: RenderPhase, frame: number) => {
       const elapsed = performance.now() - t0;
       const speed = frame > 0 ? frame / (elapsed / 1000) : 0;
-      this.onProgress({ phase, frame, totalFrames: total, elapsedMs: elapsed, speed, etaMs: speed > 0 ? ((total - frame) / speed) * 1000 : 0, bytes });
+      this.onProgress({ phase, frame, totalFrames: total, elapsedMs: elapsed, speed, etaMs: speed > 0 ? ((total - frame) / speed) * 1000 : 0, bytes: written() });
     };
-    report('preparing', 0, 0);
-
-    // ---- export canvas + engine (independent of the window size) ------------------------
-    const canvas = document.createElement('canvas');
-    canvas.width = spec.width;
-    canvas.height = spec.height;
-    const engine = new VisualizerEngine(canvas, { quality: this.job.quality, preserveDrawingBuffer: true, sceneFade: 0 });
-    engine.setSize(spec.width, spec.height, 1);
-
-    // ---- output ---------------------------------------------------------------------------
-    const info = containerInfo(spec.container);
-    const target = this.job.writable ? new mb.StreamTarget(this.job.writable, { chunked: true }) : new mb.BufferTarget();
-    const format =
-      spec.container === 'webm'
-        ? new mb.WebMOutputFormat()
-        : spec.container === 'mov'
-          ? new mb.MovOutputFormat({ fastStart: this.job.writable ? false : 'in-memory' })
-          : new mb.Mp4OutputFormat({ fastStart: this.job.writable ? false : 'in-memory' });
-    const output = new mb.Output({ format, target });
-    let bytes = 0;
-    target.on('write', ({ end }) => {
-      bytes = Math.max(bytes, end);
-    });
-    const videoSource = new mb.CanvasSource(canvas, {
-      codec: spec.videoCodec,
-      quality: new mb.Quality({ bitrate: spec.videoBitrate }),
-      keyFrameInterval: 2,
-      latencyMode: 'quality',
-      sizeChangeBehavior: 'deny',
-      hardwareAcceleration: spec.videoCodec === 'hevc' ? 'prefer-hardware' : 'no-preference',
-    });
-    const audioSource = new mb.AudioSampleSource({
-      codec: spec.audioCodec,
-      quality: new mb.Quality({ bitrate: spec.audioBitrate }),
-      transform: { sampleRate: AUDIO_SAMPLE_RATE, numberOfChannels: 2 },
-    });
-    output.addVideoTrack(videoSource, { frameRate: fps });
-    output.addAudioTrack(audioSource);
-
-    // ---- analysis: the live algorithm on decoded PCM -------------------------------------
-    let ring: PcmRing | null = null;
-    let analyser: PcmAnalyser | null = null;
-    let setTime: (t: number) => void = () => {};
-    const hub = new AnalysisHub();
-    hub.setExportMode(true);
-    hub.setTuning({
-      bassSensitivity: 1,
-      midSensitivity: 1,
-      highSensitivity: 1,
-      smoothing: typeof visual.params.smoothing === 'number' ? visual.params.smoothing : 0.45,
-      beatImpact: 1,
-      reducedMotion: this.job.reducedMotion,
-      decay: typeof visual.params.decay === 'number' ? visual.params.decay : 1,
-    });
-
-    // the WASM AAC encoder's padding is trimmed by starting the audio track before 0
-    const audioLead = spec.audioCodec === 'aac' && aacPolyfillActive() ? AAC_POLYFILL_PRIMING_FRAMES / AUDIO_SAMPLE_RATE : 0;
-
-    let frame = -preFrames; // negative = pre-roll
-    let nowMs = 1000;
-    const step = 1000 / fps;
-    let mime = info.mime;
-
-    const renderFrame = async (k: number) => {
-      const t = frameTime(spec.start, k, fps);
-      setTime(analysisTime(t, fps));
-      nowMs += step;
-      hub.tick(nowMs);
-      // the last second of pre-roll is drawn so feedback effects (trails) are warm too
-      const draw = k >= -fps;
-      engine.render({ frame: hub.frame, time: t, dt: 1 / fps, visual, reducedMotion: this.job.reducedMotion, exporting: true, skipRender: !draw });
-      if (k >= 0) {
-        await videoSource.add(frameTimestamp(k, fps), 1 / fps);
-        if (k % 15 === 0) {
-          this.onPreview(canvas);
-          report('rendering', k + 1, bytes);
-        }
-      }
-      if (!this.job.writable && bytes > MAX_IN_MEMORY_BYTES) throw new Error('OUTPUT EXCEEDS THE IN-MEMORY LIMIT — USE "WRITE TO DISK" OR A SHORTER RANGE');
+    const checkCancel = () => {
+      if (signal.aborted) throw new ExportCancelledError();
+    };
+    const checkMemory = () => {
+      if (memory?.limitError) throw memory.limitError;
     };
 
+    let engine: VisualizerEngine | null = null;
+    let output: InstanceType<Mediabunny['Output']> | null = null;
     try {
+      if (!(spec.end > spec.start)) throw new Error('EMPTY EXPORT RANGE');
+      report('preparing', 0);
+      const mb = await loadMediabunny();
+      checkCancel();
+
+      // ---- export canvas + engine (independent of the window size) ----------------------
+      const canvas = document.createElement('canvas');
+      canvas.width = spec.width;
+      canvas.height = spec.height;
+      engine = new VisualizerEngine(canvas, { quality: this.job.quality, preserveDrawingBuffer: true, sceneFade: 0 });
+      engine.setSize(spec.width, spec.height, 1);
+      const eng = engine;
+
+      // ---- output -------------------------------------------------------------------------
+      const info = containerInfo(spec.container);
+      // Packets go to the sink as they are produced ('reserve' keeps the metadata at the
+      // front without holding the media in memory), so the sink sees the real size.
+      const sinkStream = (disk ? disk.stream : memory!.stream) as WritableStream;
+      const target = new mb.StreamTarget(sinkStream, { chunked: true, chunkSize: disk ? DISK_CHUNK_BYTES : MEMORY_CHUNK_BYTES });
+      const format =
+        spec.container === 'webm'
+          ? new mb.WebMOutputFormat()
+          : spec.container === 'mov'
+            ? new mb.MovOutputFormat({ fastStart: 'reserve' })
+            : new mb.Mp4OutputFormat({ fastStart: 'reserve' });
+      output = new mb.Output({ format, target });
+      const videoSource = new mb.CanvasSource(canvas, {
+        codec: spec.videoCodec,
+        quality: new mb.Quality({ bitrate: spec.videoBitrate }),
+        keyFrameInterval: 2,
+        latencyMode: 'quality',
+        sizeChangeBehavior: 'deny',
+        hardwareAcceleration: spec.videoCodec === 'hevc' ? 'prefer-hardware' : 'no-preference',
+      });
+      const audioSource = new mb.AudioSampleSource({
+        codec: spec.audioCodec,
+        quality: new mb.Quality({ bitrate: spec.audioBitrate }),
+        transform: { sampleRate: AUDIO_SAMPLE_RATE, numberOfChannels: 2 },
+      });
+      output.addVideoTrack(videoSource, { frameRate: fps, maximumPacketCount: total + 16 });
+      output.addAudioTrack(audioSource, { maximumPacketCount: maxAudioPackets(spec.end - spec.start) });
+
+      // ---- analysis: the live algorithm on decoded PCM -----------------------------------
+      let ring: PcmRing | null = null;
+      let setTime: (t: number) => void = () => {};
+      const hub = new AnalysisHub();
+      hub.setExportMode(true);
+      hub.setTuning({
+        bassSensitivity: 1,
+        midSensitivity: 1,
+        highSensitivity: 1,
+        smoothing: typeof visual.params.smoothing === 'number' ? visual.params.smoothing : 0.45,
+        beatImpact: 1,
+        reducedMotion: this.job.reducedMotion,
+        decay: typeof visual.params.decay === 'number' ? visual.params.decay : 1,
+      });
+
+      // the WASM AAC encoder's padding is trimmed by starting the audio track before 0
+      const audioLead = spec.audioCodec === 'aac' && aacPolyfillActive() ? AAC_POLYFILL_PRIMING_FRAMES / AUDIO_SAMPLE_RATE : 0;
+
+      let frame = -preFrames; // negative = pre-roll
+      let nowMs = 1000;
+      const step = 1000 / fps;
+
+      const renderFrame = async (k: number) => {
+        const t = frameTime(spec.start, k, fps);
+        setTime(analysisTime(t, fps));
+        nowMs += step;
+        hub.tick(nowMs);
+        // the last second of pre-roll is drawn so feedback effects (trails) are warm too
+        const draw = k >= -fps;
+        eng.render({ frame: hub.frame, time: t, dt: 1 / fps, visual, reducedMotion: this.job.reducedMotion, exporting: true, skipRender: !draw });
+        if (k >= 0) {
+          await videoSource.add(frameTimestamp(k, fps), 1 / fps);
+          if (k % 15 === 0) {
+            this.onPreview(canvas);
+            report('rendering', k + 1);
+          }
+        }
+        checkMemory();
+      };
+
       await output.start();
-      report('prerolling', 0, 0);
+      report('prerolling', 0);
       const startFrame = (sr: number) => Math.round(spec.start * sr);
       const endFrame = (sr: number) => Math.round(spec.end * sr);
       let decodedUntil = 0;
@@ -270,8 +291,7 @@ export class RenderController {
         const sr = chunk.sampleRate;
         if (!ring) {
           ring = new PcmRing(Math.ceil(sr * 8));
-          analyser = new PcmAnalyser(ring, sr, this.job.fftSize);
-          const ve = virtualEngine(analyser);
+          const ve = virtualEngine(new PcmAnalyser(ring, sr, this.job.fftSize));
           setTime = ve.setTime;
           hub.attach(ve.engine);
           hub.setEventMap(this.job.eventMap);
@@ -296,15 +316,18 @@ export class RenderController {
             sampleRate: sr,
             timestamp: (a - startFrame(sr)) / sr - audioLead,
           });
-          await audioSource.add(sample);
-          sample.close();
+          try {
+            await audioSource.add(sample);
+          } finally {
+            sample.close();
+          }
         }
         decodedUntil = (chunk.firstFrame + n) / sr;
 
         // render every frame whose analysis window is fully decoded
         while (frame < total && analysisTime(frameTime(spec.start, frame, fps), fps) <= decodedUntil - 0.001) {
-          if (signal.aborted) throw new ExportCancelledError();
-          if (frame === 0) report('rendering', 0, bytes);
+          checkCancel();
+          if (frame === 0) report('rendering', 0);
           await renderFrame(frame);
           frame++;
           if (performance.now() - lastYield > 40) {
@@ -316,7 +339,7 @@ export class RenderController {
       if (!ring) throw new Error('THE FILE CONTAINS NO DECODABLE AUDIO');
       // frames past the last decoded sample (silence)
       while (frame < total) {
-        if (signal.aborted) throw new ExportCancelledError();
+        checkCancel();
         await renderFrame(frame);
         frame++;
         if (performance.now() - lastYield > 40) {
@@ -325,27 +348,60 @@ export class RenderController {
         }
       }
 
-      report('finalizing', total, bytes);
+      // ---- finalize: still cancellable (the finished data is dropped afterwards) ---------
+      checkCancel();
+      report('finalizing', total);
       videoSource.close();
       audioSource.close();
-      mime = await output.getMimeType().catch(() => info.mime);
+      const mime = await output.getMimeType().catch((err: unknown) => {
+        console.warn('[BEAT//FORM] could not read the codec string; using the plain MIME type', err);
+        return info.mime;
+      });
       await output.finalize();
-      const buffer = target instanceof mb.BufferTarget ? target.buffer : null;
-      const blob = buffer ? new Blob([buffer], { type: info.mime }) : null;
-      return { blob, bytes: buffer?.byteLength ?? bytes, mimeType: mime, frames: total, durationSeconds: total / fps, elapsedMs: performance.now() - t0 };
-    } catch (err) {
-      try {
-        await output.cancel();
-      } catch {
-        /* output already closed */
+      checkMemory();
+      checkCancel();
+
+      // ---- commit: the point of no return -------------------------------------------------
+      if (disk) {
+        report('saving', total);
+        await disk.commit();
+        return { blob: null, bytes: disk.bytes, mimeType: mime, frames: total, durationSeconds: total / fps, elapsedMs: performance.now() - t0 };
       }
-      if (signal.aborted) throw new ExportCancelledError();
+      const blob = memory!.toBlob(info.mime);
+      memory!.discard();
+      return { blob, bytes: blob.size, mimeType: mime, frames: total, durationSeconds: total / fps, elapsedMs: performance.now() - t0 };
+    } catch (err) {
+      if (output) {
+        try {
+          await output.cancel();
+        } catch (cancelErr) {
+          console.warn('[BEAT//FORM] cancelling the muxer failed', cancelErr);
+        }
+      }
+      memory?.discard();
+      await disk?.abort(err);
+      if (signal.aborted && disk?.state !== 'committed') throw new ExportCancelledError();
       throw err;
     } finally {
-      engine.dispose();
-      engine.renderer.forceContextLoss();
+      engine?.dispose();
+      engine?.renderer.forceContextLoss();
     }
   }
+}
+
+/**
+ * The muxer hands data to the sink a chunk at a time (keeping at most two in flight), so the
+ * chunk size bounds how far the counted size can lag behind: ≤ 512 KB in memory.
+ */
+const MEMORY_CHUNK_BYTES = 2 ** 18;
+const DISK_CHUNK_BYTES = 2 ** 20;
+
+/**
+ * Upper bound of audio packets for 'reserve' fast start: AAC uses 1024 and Opus 960 samples
+ * per packet at 48 kHz (≈ 47–50 per second); 100 per second plus a margin leaves headroom.
+ */
+export function maxAudioPackets(seconds: number): number {
+  return Math.ceil((seconds + 2) * 100);
 }
 
 /**
@@ -353,7 +409,7 @@ export class RenderController {
  * `target` — a true preview of the exported frame, independent of the live stage.
  */
 export async function renderStill(
-  job: Omit<RenderJob, 'writable' | 'spec'> & { spec: Pick<ExportSpec, 'width' | 'height' | 'fps'> },
+  job: Omit<RenderJob, 'disk' | 'memoryLimitBytes' | 'spec'> & { spec: Pick<ExportSpec, 'width' | 'height' | 'fps'> },
   time: number,
   target: HTMLCanvasElement,
 ): Promise<void> {

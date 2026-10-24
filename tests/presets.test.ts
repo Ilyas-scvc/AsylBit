@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { createEffect } from '../src/engine/post/effects';
 import { BUILTIN_PRESETS } from '../src/engine/presets/builtins';
-import { addPreset, duplicatePreset, MAX_USER_PRESETS, removePreset, renamePreset, updatePreset } from '../src/engine/presets/library';
+import { addPreset, duplicatePreset, importPresets, MAX_USER_PRESETS, removePreset, renamePreset, updatePreset } from '../src/engine/presets/library';
 import {
   decodePresetFromUrl,
   encodePresetForUrl,
   exampleZoomBinding,
   makePreset,
+  MAX_IMPORT_BYTES,
   MAX_IMPORT_PRESETS,
   MAX_URL_PAYLOAD,
   migratePreset,
   PRESET_SCHEMA,
+  presetBackupFiles,
+  presetsFromFile,
   presetsFromJson,
   presetToJson,
   presetValues,
@@ -157,7 +160,8 @@ describe('preset library', () => {
     list = renamePreset(list, a.id, '  Renamed  ', NOW + 1);
     expect(list[0].name).toBe('Renamed');
     expect(list[0].updatedAt).toBe(NOW + 1);
-    const { list: withCopy, copy } = duplicatePreset(list, list[0], NOW + 2);
+    const { list: withCopy, copy: maybeCopy } = duplicatePreset(list, list[0], NOW + 2);
+    const copy = maybeCopy!;
     expect(withCopy).toHaveLength(2);
     expect(copy.id).not.toBe(a.id);
     expect(copy.name).toMatch(/COPY/i);
@@ -167,9 +171,108 @@ describe('preset library', () => {
     expect(removePreset(changed, a.id).map((p) => p.id)).toEqual([copy.id]);
   });
 
-  it('caps the number of user presets', () => {
+  it('caps the number of user presets without ever pushing one out', () => {
     let list = [] as ReturnType<typeof addPreset>;
     for (let i = 0; i < MAX_USER_PRESETS + 10; i++) list = addPreset(list, { ...sample(), id: `p-${i}` });
     expect(list.length).toBe(MAX_USER_PRESETS);
+    expect(list.some((p) => p.id === 'p-0')).toBe(true); // the oldest is still there
+    expect(list.some((p) => p.id === `p-${MAX_USER_PRESETS}`)).toBe(false); // the 201st was refused
+    expect(duplicatePreset(list, list[0]).copy).toBeNull();
+    // replacing an existing preset still works when full
+    expect(addPreset(list, { ...list[5], name: 'NEW NAME' }).find((p) => p.id === list[5].id)!.name).toBe('NEW NAME');
+  });
+});
+
+describe('preset backup of a full library', () => {
+  /** The largest preset the schema allows: every modulation slot and effect slot used. */
+  function maximalPreset(i: number) {
+    const sceneIds = ['pulse-object', 'reactive-mesh', 'cosmic-rings', 'particle-cloud', 'audio-tunnel', 'plasma-flow', 'fractal-bloom', 'radial-spectrum', 'wave-field'];
+    const sceneId = sceneIds[i % sceneIds.length];
+    const post = Array.from({ length: 12 }, (_, k) => createEffect(['bloom', 'glitch', 'trails', 'kaleidoscope', 'grain', 'vignette'][k % 6] as never, `fx-${String(k).padStart(2, '0')}-${'x'.repeat(34)}` /* 40 chars, the schema maximum */));
+    const values: Record<string, number> = {};
+    for (const key of ['scale', 'zoom', 'bass', 'mids', 'treble', 'brightness', 'contrast', 'saturation', 'speed', 'rotation']) values[key] = 1.0123456789012345;
+    // targets valid in every scene, and one real parameter of each effect type
+    const targets = ['bass', 'mids', 'treble', 'subBass', 'kickImpact', 'brightness', 'contrast', 'saturation'];
+    const fxParam: Record<string, string> = { bloom: 'intensity', glitch: 'amount', trails: 'persistence', kaleidoscope: 'spin', grain: 'amount', vignette: 'amount' };
+    const modulations = Array.from({ length: 32 }, (_, k) => ({
+      ...createBinding(k < 8 ? targets[k] : `fx:${post[k % 12].id}:${fxParam[post[k % 12].type]}`, 'lfo', `m-${k}-${'y'.repeat(50)}`),
+      amount: -0.123456789,
+      attack: 0.0123456789,
+      release: 0.3456789012,
+      lfoRate: 1.23456789,
+    }));
+    return makePreset({ sceneId, name: `${'PRESET NAME '.repeat(5)}${i}`.slice(0, 60), values, modulations, post, now: NOW + i });
+  }
+
+  it('EXPORT ALL of the largest allowed library restores completely, effects and modulations included', () => {
+    const library = Array.from({ length: MAX_USER_PRESETS }, (_, i) => maximalPreset(i));
+    const json = presetToJson(library);
+    expect(json.length).toBeLessThanOrEqual(MAX_IMPORT_BYTES);
+    const { presets, errors } = presetsFromJson(json, NOW);
+    expect(errors).toEqual([]);
+    expect(presets).toHaveLength(MAX_USER_PRESETS);
+    presets.forEach((p, i) => {
+      expect(p.name).toBe(library[i].name);
+      expect(p.sceneId).toBe(library[i].sceneId);
+      expect(presetValues(p)).toEqual(presetValues(library[i]));
+      expect(p.post).toEqual(library[i].post);
+      expect(p.modulations).toEqual(library[i].modulations);
+    });
+    // and the restored list fits into the library without pushing anything out
+    let list: ReturnType<typeof addPreset> = [];
+    for (const p of presets) list = addPreset(list, p);
+    expect(list).toHaveLength(MAX_USER_PRESETS);
+  });
+
+  it('import limits match the library limits', () => {
+    expect(MAX_IMPORT_PRESETS).toBeGreaterThanOrEqual(MAX_USER_PRESETS);
+  });
+});
+
+describe('importing into an existing library', () => {
+  const lib = (n: number, tag: string) => Array.from({ length: n }, (_, i) => ({ ...makePreset({ sceneId: 'pulse-object', name: `${tag} ${i}`, values: { zoom: 1 + i / 1000 }, now: NOW }), id: `${tag}-${i}` }));
+
+  it('adds in file order on top, never evicts, and reports what did not fit', () => {
+    const existing = lib(150, 'OLD');
+    const incoming = lib(80, 'NEW');
+    const r = importPresets(existing, incoming);
+    expect(r.added).toBe(50);
+    expect(r.overflow).toBe(30);
+    expect(r.list).toHaveLength(MAX_USER_PRESETS);
+    expect(r.list.slice(0, 3).map((p) => p.name)).toEqual(['NEW 0', 'NEW 1', 'NEW 2']);
+    expect(existing.every((p) => r.list.includes(p))).toBe(true);
+  });
+
+  it('restoring the same backup twice does not duplicate presets', () => {
+    const backup = presetsFromJson(presetToJson(lib(20, 'B')), NOW).presets;
+    const once = importPresets([], backup);
+    const twice = importPresets(once.list, presetsFromJson(presetToJson(lib(20, 'B')), NOW).presets);
+    expect(twice.added).toBe(0);
+    expect(twice.duplicates).toBe(20);
+    expect(twice.list).toHaveLength(20);
+  });
+
+  it('checks the file size before reading the file', async () => {
+    let read = false;
+    const huge = { size: MAX_IMPORT_BYTES + 1, text: async () => ((read = true), '[]') };
+    const r = await presetsFromFile(huge, NOW);
+    expect(read).toBe(false);
+    expect(r.presets).toEqual([]);
+    expect(r.errors[0]).toMatch(/TOO LARGE/);
+    const ok = await presetsFromFile(new Blob([presetToJson(lib(3, 'S'))]), NOW);
+    expect(ok.presets).toHaveLength(3);
+  });
+
+  it('a backup that would exceed the import limit is split into files that each import', () => {
+    const presets = lib(40, 'X');
+    const files = presetBackupFiles(presets, 20_000);
+    expect(files.length).toBeGreaterThan(1);
+    let restored = 0;
+    for (const f of files) {
+      expect(f.length).toBeLessThanOrEqual(20_000);
+      restored += presetsFromJson(f, NOW).presets.length;
+    }
+    expect(restored).toBe(40);
+    expect(presetBackupFiles(presets)).toHaveLength(1); // the real limit fits a whole library
   });
 });

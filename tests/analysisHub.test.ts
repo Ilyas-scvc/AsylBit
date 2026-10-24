@@ -138,3 +138,120 @@ describe('AnalysisHub', () => {
     expect(Math.max(...hub.frame.spectrum)).toBeLessThan(0.02);
   });
 });
+
+describe('AnalysisHub — latency compensation at high refresh rates', () => {
+  for (const fps of [60, 144, 240]) {
+    it(`keeps analysing at ${fps} fps with the maximum compensation`, () => {
+      // 350 + 70 ms output latency − 20 ms display allowance = 0.4 s, the maximum supported
+      const f = fakeEngine({ out: 0.35, base: 0.07 });
+      const hub = new AnalysisHub();
+      hub.attach(f.engine);
+      f.state.playing = true;
+      let now = 1000;
+      let maxBass = 0;
+      let maxRms = 0;
+      for (let t = 4; t < 6; t += 1 / fps) {
+        f.state.time = t;
+        f.analyser.seek(t);
+        now += 1000 / fps;
+        hub.tick(now);
+        if (t > 4.6) {
+          maxBass = Math.max(maxBass, hub.frame.bass);
+          maxRms = Math.max(maxRms, hub.frame.rms);
+        }
+      }
+      expect(hub.latency).toBeCloseTo(0.4, 5);
+      expect(maxBass).toBeGreaterThan(0.2);
+      expect(maxRms).toBeGreaterThan(0.05);
+      expect(hub.frame.activity).toBeGreaterThan(0.5);
+    });
+  }
+});
+
+describe('AnalysisHub — delay line capacity', () => {
+  it('holds the maximum compensation at the fastest accepted tick rate (250 Hz)', async () => {
+    const { DELAY_SLOTS, MAX_COMPENSATION } = await import('../src/audio/analysis/AnalysisHub');
+    expect(DELAY_SLOTS * 4).toBeGreaterThan(MAX_COMPENSATION * 1000);
+    expect(DELAY_SLOTS).toBeLessThanOrEqual(256); // bounded memory
+  });
+
+  it('the visual delay equals the compensation at 240 fps (no stale or skipped results)', () => {
+    const f = fakeEngine({ out: 0.35, base: 0.07 });
+    const hub = new AnalysisHub();
+    hub.attach(f.engine);
+    f.state.playing = true;
+    const fps = 240;
+    let now = 1000;
+    let onsetSeen = -1;
+    // silence until the first kick at 4.0 s, then watch when the bass appears on screen
+    for (let t = 3.2; t < 5; t += 1 / fps) {
+      f.state.time = t;
+      f.analyser.seek(t);
+      now += 1000 / fps;
+      hub.tick(now);
+      if (onsetSeen < 0 && hub.frame.bass > 0.1) onsetSeen = t;
+    }
+    // shown ≈ 0.4 s after the analyser saw it (plus the analysis window)
+    expect(onsetSeen - 4).toBeGreaterThan(0.38);
+    expect(onsetSeen - 4).toBeLessThan(0.5);
+  });
+});
+
+describe('AnalysisHub — an event at the very start of the track', () => {
+  const zeroMap: EventMap = {
+    times: new Float32Array([0, 0.5, 1.0]),
+    strengths: new Float32Array([1, 1, 1]),
+    types: new Uint8Array([EventType.KICK, EventType.KICK, EventType.KICK]),
+  };
+  function session(latency: number) {
+    const f = fakeEngine({ out: latency, base: 0 });
+    const hub = new AnalysisHub();
+    hub.attach(f.engine);
+    hub.setEventMap(zeroMap);
+    let now = 1000;
+    // while paused the position holds at `from`; while playing it advances to `to`
+    const run = (from: number, to: number, playing: boolean) => {
+      f.state.playing = playing;
+      for (let t = from; t < to; t += 1 / 60) {
+        f.state.time = playing ? t : from;
+        f.analyser.seek(f.state.time);
+        now += 1000 / 60;
+        hub.tick(now);
+      }
+    };
+    return { hub, run, kicks: () => hub.frame.counts[EventType.KICK] };
+  }
+
+  it('fires once when playback starts at 0 (after the output latency)', () => {
+    const s = session(0.05);
+    s.run(0, 0.1, false); // paused at the start
+    s.run(0, 0.3, true);
+    expect(s.kicks()).toBe(1);
+    expect(s.hub.frame.lastTime[EventType.KICK]).toBe(0);
+  });
+
+  it('pause and resume do not repeat it', () => {
+    const s = session(0.02);
+    s.run(0, 0.2, true);
+    s.run(0.2, 0.4, false);
+    s.run(0.2, 0.45, true);
+    expect(s.kicks()).toBe(1);
+  });
+
+  it('a loop restart (the element seeks to 0) fires it once more', () => {
+    const s = session(0.02);
+    s.run(0, 1.2, true);
+    expect(s.kicks()).toBe(3);
+    s.hub.onSeek(0);
+    s.run(0, 0.2, true);
+    expect(s.kicks()).toBe(4);
+  });
+
+  it('a seek past it never fires it', () => {
+    const s = session(0.02);
+    s.run(0, 0.05, false);
+    s.hub.onSeek(0.2);
+    s.run(0.2, 0.4, true);
+    expect(s.kicks()).toBe(0);
+  });
+});
