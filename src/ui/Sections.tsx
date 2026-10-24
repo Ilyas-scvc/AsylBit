@@ -1,62 +1,37 @@
 import { EVENT_LABELS } from '../audio/dsp/events';
+import { sceneRegistry } from '../engine/scenes/registry';
 import { usePlayer } from '../state/player';
-import { MODES, useSettings, type VisualMode } from '../state/settings';
+import { useSettings } from '../state/settings';
+import { selectScene, useVisual } from '../state/visual';
 import { formatDb, formatTime } from './format';
 
-const MAPPINGS: Record<VisualMode, [string, string][]> = {
-  pulse: [
-    ['BASS', 'SCALE + LARGE LOBES'],
-    ['KICK', 'SPRING IMPULSE + RIM'],
-    ['MID', 'SURFACE FOLDING + FLOW'],
-    ['HIGH', 'RIPPLE + PARTICLE SHELL'],
-    ['SNARE', 'TRAVELLING RING'],
-  ],
-  radial: [
-    ['FFT', '192 LOG-SPACED LINES'],
-    ['LOWS', 'LONG, SLOW, HEAVY'],
-    ['HIGHS', 'SHORT, FAST, LIGHT'],
-    ['HISTORY', 'RECEDING TUNNEL'],
-    ['HAT', 'PARTICLES FROM ITS BAND'],
-  ],
-  wave: [
-    ['TIME', 'ROWS SCROLL AWAY'],
-    ['BASS', 'BROAD SWELLS'],
-    ['MID', 'BENDS THE GEOMETRY'],
-    ['HIGH', 'FINE FAST RIPPLE'],
-    ['CAMERA', 'SLOW DRIFT'],
-  ],
-};
-
-function ModesIndex() {
-  const mode = useSettings((s) => s.mode);
-  const set = useSettings((s) => s.set);
+function ScenesIndex() {
+  const sceneId = useVisual((s) => s.sceneId);
   return (
-    <section className="block" id="modes" aria-labelledby="modes-title">
+    <section className="block" id="scenes" aria-labelledby="scenes-title">
       <header className="block-head">
         <span className="dim">02</span>
-        <h2 id="modes-title">MODES</h2>
-        <span className="dim">3 FORMS · ONE ANALYSIS ENGINE</span>
+        <h2 id="scenes-title">SCENES</h2>
+        <span className="dim">{sceneRegistry.size} FORMS · ONE ANALYSIS ENGINE</span>
       </header>
       <ol className="mode-list">
-        {MODES.map((m) => (
-          <li key={m.id} className={mode === m.id ? 'is-on' : ''}>
-            <span className="mode-file">[MODE {m.index}]</span>
+        {sceneRegistry.list().map((m) => (
+          <li key={m.id} className={sceneId === m.id ? 'is-on' : ''}>
+            <span className="mode-file">
+              [SCENE {m.index}]<br />
+              <span className="dim">{m.category.toUpperCase()}</span>
+            </span>
             <h3 className="mode-big">{m.name.toLowerCase()}</h3>
             <dl className="mode-map">
-              {MAPPINGS[m.id].map(([k, v]) => (
+              {m.mapping.map(([k, v]) => (
                 <div key={k}>
                   <dt>[{k}]</dt>
                   <dd>{v}</dd>
                 </div>
               ))}
             </dl>
-            <a
-              className="btn mode-select"
-              href="#top"
-              aria-pressed={mode === m.id}
-              onClick={() => set('mode', m.id)}
-            >
-              {mode === m.id ? 'ACTIVE' : 'SELECT'} →
+            <a className="btn mode-select" href="#top" aria-pressed={sceneId === m.id} onClick={() => selectScene(m.id)}>
+              {sceneId === m.id ? 'ACTIVE' : 'SELECT'} →
             </a>
           </li>
         ))}
@@ -118,12 +93,14 @@ function Signal() {
             <li>AUDIO ELEMENT</li>
             <li>MEDIA SOURCE</li>
             <li>ANALYSER · FFT {fftSize}</li>
-            <li>GAIN · VOLUME</li>
-            <li>OUTPUT</li>
+            <li>SCENE AUDIO SETTINGS</li>
+            <li>MODULATION</li>
+            <li>SCENE + FX</li>
           </ol>
           <p>
             Band levels, a log-spaced spectrum and spectral flux are read from the analyser on every animation frame, normalised with an
-            adaptive reference and smoothed with separate attack and release.
+            adaptive reference and smoothed with separate attack and release. Each scene then applies its own sensitivity, gate and impact,
+            and any parameter can be bound to an audio source.
           </p>
           <h3 className="dim">[B] PRE-ANALYSIS · ONCE PER FILE, IN A WORKER</h3>
           <ol>
@@ -135,12 +112,23 @@ function Signal() {
           </ol>
           <p>
             Probable kicks, snares and hats are found by transients in separate bands, a real energy rise and minimum gaps between hits, so a
-            held bass note is not read as a new kick. It is a heuristic on a finished mix — not true instrument separation. Until the map is
-            ready, the same rules run causally in real time.
+            held bass note is not read as a new kick. It is a heuristic on a finished mix — not true instrument separation.
+          </p>
+          <h3 className="dim">[C] VIDEO EXPORT · FRAME BY FRAME</h3>
+          <ol>
+            <li>STREAMED DECODE</li>
+            <li>SAME ANALYSIS, OFFLINE</li>
+            <li>FRAME N @ START + N/FPS</li>
+            <li>WEBCODECS</li>
+            <li>MP4 · MOV · WEBM</li>
+          </ol>
+          <p>
+            Exports never record the screen: every frame is rendered at its exact music time on a dedicated canvas at the target resolution,
+            encoded with the browser's own encoders and muxed with the original audio track.
           </p>
         </div>
         <div className="dossier-wrap">
-          <h3 className="dim">[C] TRACK DOSSIER</h3>
+          <h3 className="dim">[D] TRACK DOSSIER</h3>
           <Dossier />
         </div>
       </div>
@@ -152,11 +140,16 @@ function Keys() {
   const keys: [string, string][] = [
     ['SPACE', 'PLAY / PAUSE'],
     ['← →', 'SEEK 5 S'],
-    ['1 2 3', 'MODE'],
+    ['1 … 9', 'SCENE'],
+    ['[ ]', 'PREV / NEXT SCENE'],
+    ['B', 'SCENE BROWSER'],
+    ['S', 'INSPECTOR'],
+    ['E', 'EXPORT STUDIO'],
+    ['H', 'HIDE / SHOW UI'],
+    ['ESC', 'SHOW UI · CLOSE PANEL'],
     ['F', 'FULLSCREEN'],
     ['L', 'REPEAT'],
     ['M', 'MUTE'],
-    ['S', 'SETTINGS'],
   ];
   return (
     <footer className="block footer" id="keys" aria-labelledby="keys-title">
@@ -187,8 +180,8 @@ function Keys() {
 
 export function Sections() {
   return (
-    <div className="below">
-      <ModesIndex />
+    <div className="below chrome">
+      <ScenesIndex />
       <Signal />
       <Keys />
     </div>

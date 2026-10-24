@@ -525,38 +525,76 @@ a {
   color: var(--danger);
 }
 
-.mode-switch {
+.hero-controls {
   position: absolute;
   right: calc(var(--gutter) + 14px);
   bottom: calc(var(--player-h) + 28px);
   z-index: 3;
   display: flex;
-  border: 1px solid var(--line-strong);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
-.mode-switch button {
+.scene-switch {
+  display: flex;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+.scene-switch button {
+  border: 0;
+  background: transparent;
+  transition: background-color 0.18s, color 0.18s;
+}
+.scene-switch button:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.ss-step {
+  width: 40px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--fg-dim);
+}
+.ss-name {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  min-width: 96px;
-  padding: 8px 12px;
+  min-width: 210px;
+  padding: 8px 14px;
+  border-left: 1px solid var(--line) !important;
+  border-right: 1px solid var(--line) !important;
+  text-align: left;
+}
+.ss-name .mode-name {
+  color: var(--accent);
+}
+.frame-switch {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
+.frame-switch > span {
+  padding: 0 8px;
+}
+.frame-switch button {
+  height: 26px;
+  padding: 0 9px;
   border: 0;
   border-left: 1px solid var(--line);
   background: transparent;
-  text-align: left;
-  transition:
-    background-color 0.18s,
-    color 0.18s;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--fg-dim);
 }
-.mode-switch button:first-child {
-  border-left: 0;
+.frame-switch button:hover {
+  color: var(--fg);
 }
-.mode-switch button:hover {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-.mode-switch button.is-on {
-  background: var(--accent);
+.frame-switch button.is-on {
+  background: var(--fg);
   color: var(--ink);
 }
 .mode-index {
@@ -1345,7 +1383,7 @@ kbd {
   .nav {
     display: none;
   }
-  .header-settings {
+  .header-actions {
     margin-left: auto;
   }
   .header-settings .label {
@@ -1354,7 +1392,7 @@ kbd {
   .header-settings {
     width: 40px;
     justify-content: center;
-    padding: 0;
+    padding: 0 !important;
   }
   .hero {
     min-height: 560px;
@@ -1412,15 +1450,38 @@ kbd {
     margin: 10px 0 0;
     padding: 6px 0;
   }
-  .mode-switch {
-    left: 20px;
-    right: 20px;
-    bottom: calc(var(--player-h) + 22px);
+  .hero-controls {
+    left: 16px;
+    right: 16px;
+    bottom: calc(var(--player-h) + 16px);
+    align-items: stretch;
   }
-  .mode-switch button {
+  .scene-switch .ss-name {
     flex: 1;
     min-width: 0;
+  }
+  .ss-step {
+    width: 48px;
     min-height: 48px;
+  }
+  .frame-switch {
+    justify-content: space-between;
+  }
+  .frame-switch button {
+    flex: 1;
+    height: 36px;
+  }
+  .header-actions .label {
+    display: none;
+  }
+  .header-actions .label-short {
+    display: inline;
+  }
+  .header-actions .btn {
+    padding: 0 9px;
+  }
+  .header-meta {
+    display: none;
   }
 
   .player {

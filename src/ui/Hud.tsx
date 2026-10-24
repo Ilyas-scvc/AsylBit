@@ -6,7 +6,9 @@ import { useEffect, useRef } from 'react';
 import { analysisHub } from '../audio/analysis/AnalysisHub';
 import { binWidth } from '../audio/dsp/bands';
 import { usePlayer } from '../state/player';
-import { MODES, useSettings } from '../state/settings';
+import { useSettings } from '../state/settings';
+import { getScene } from '../engine/scenes/registry';
+import { useVisual } from '../state/visual';
 import { useRuntime } from '../visual/runtime';
 import { telemetry } from '../visual/telemetry';
 import { formatKhz } from './format';
@@ -41,7 +43,7 @@ export function useStateLabel(): { text: string; tone: 'idle' | 'live' | 'busy' 
 }
 
 export function Hud() {
-  const mode = useSettings((s) => s.mode);
+  const sceneId = useVisual((s) => s.sceneId);
   const fftSize = useSettings((s) => s.fftSize);
   const sampleRate = usePlayer((s) => s.sampleRate);
   const analysisStatus = usePlayer((s) => s.analysisStatus);
@@ -53,7 +55,7 @@ export function Hud() {
   const contextLost = useRuntime((s) => s.contextLost);
   const visible = useRuntime((s) => s.stageVisible);
   const state = useStateLabel();
-  const m = MODES.find((x) => x.id === mode)!;
+  const m = getScene(sceneId);
 
   const readout = useRef<HTMLSpanElement>(null);
   const avRef = useRef<HTMLSpanElement>(null);
