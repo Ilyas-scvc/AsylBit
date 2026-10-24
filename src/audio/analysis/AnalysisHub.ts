@@ -18,6 +18,8 @@ import { RealtimeAnalyzer, type AnalyzerTuning } from './RealtimeAnalyzer';
 export interface HubTuning extends AnalyzerTuning {
   beatImpact: number;
   reducedMotion: boolean;
+  /** multiplier for the impulse decay times (1 = default) */
+  decay?: number;
 }
 
 /** Display pipeline delay (render + composite) that already offsets part of the audio latency. */
@@ -30,6 +32,7 @@ interface Slot {
   media: number;
   rms: number;
   rmsDb: number;
+  sub: number;
   bass: number;
   mid: number;
   high: number;
@@ -47,6 +50,7 @@ function makeSlot(): Slot {
     media: 0,
     rms: 0,
     rmsDb: -200,
+    sub: 0,
     bass: 0,
     mid: 0,
     high: 0,
@@ -191,6 +195,7 @@ export class AnalysisHub {
       w.media = media;
       w.rms = a.rms;
       w.rmsDb = a.rmsDb;
+      w.sub = a.sub;
       w.bass = a.bass;
       w.mid = a.mid;
       w.high = a.high;
@@ -216,6 +221,7 @@ export class AnalysisHub {
         const r = this.slots[pick];
         f.rms = r.rms;
         f.rmsDb = r.rmsDb;
+        f.sub = r.sub;
         f.bass = r.bass;
         f.mid = r.mid;
         f.high = r.high;
@@ -244,6 +250,7 @@ export class AnalysisHub {
     } else {
       // no audio graph yet (nothing played): everything rests
       f.rms = decay(f.rms, dt, 0.2);
+      f.sub = decay(f.sub, dt, 0.2);
       f.bass = decay(f.bass, dt, 0.2);
       f.mid = decay(f.mid, dt, 0.2);
       f.high = decay(f.high, dt, 0.2);
@@ -270,7 +277,7 @@ export class AnalysisHub {
       if (!f.hasTrack) f.eventSource = 'none';
     }
 
-    const slow = this.tuning.reducedMotion ? 1.7 : 1;
+    const slow = (this.tuning.reducedMotion ? 1.7 : 1) * (this.tuning.decay ?? 1);
     f.kick = decay(f.kick, dt, 0.17 * slow);
     f.snare = decay(f.snare, dt, 0.22 * slow);
     f.hat = decay(f.hat, dt, 0.07 * slow);

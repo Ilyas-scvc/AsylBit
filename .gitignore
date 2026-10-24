@@ -16,3 +16,6 @@ coverage
 .wrangler/
 .DS_Store
 Thumbs.db
+
+# Dev-only export verification output
+.exports/

@@ -6,6 +6,7 @@ export interface BandRange {
 }
 
 /** The three musical bands exposed to the visuals (approximate, per the brief). */
+export const SUB: BandRange = { lo: 20, hi: 60 };
 export const BASS: BandRange = { lo: 20, hi: 150 };
 export const MID: BandRange = { lo: 150, hi: 2000 };
 export const HIGH: BandRange = { lo: 2000, hi: 12000 };

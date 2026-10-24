@@ -10,6 +10,7 @@ import { AudioEngine, LoadCancelledError } from './engine/AudioEngine';
 import { validateAudioFile } from './engine/fileValidation';
 import { loadPlayerPrefs, savePlayerPrefs, usePlayer } from '../state/player';
 import { resolveReducedMotion, useSettings, type VisualSettings } from '../state/settings';
+import { useVisual } from '../state/visual';
 import { useNotice } from '../state/notice';
 
 export const engine = new AudioEngine();
@@ -17,6 +18,12 @@ const preAnalyzer = new PreAnalyzer();
 analysisHub.attach(engine);
 
 let analysisToken = 0;
+/** The file currently loaded in the player (the offline video renderer reads it directly). */
+let currentFile: File | null = null;
+
+export function getCurrentFile(): File | null {
+  return currentFile;
+}
 let systemReducedMotion = false;
 
 // ---- engine → store ------------------------------------------------------------------
@@ -60,25 +67,33 @@ engine.on((e) => {
 });
 
 // ---- settings → engine / hub ------------------------------------------------------------
-function applySettings(s: VisualSettings): void {
+// The shared analysis runs neutral (sensitivity 1, impact 1); each scene applies its own
+// audio-reaction settings on top (AudioFeatureProvider). Smoothing and decay shape the
+// analysis itself, so they come from the active scene.
+function applySettings(): void {
+  const s: VisualSettings = useSettings.getState();
+  const v = useVisual.getState();
+  const params = v.scenes[v.sceneId]?.params ?? {};
   engine.setFftSize(s.fftSize);
   analysisHub.setTuning({
-    bassSensitivity: s.bassSensitivity,
-    midSensitivity: s.midSensitivity,
-    highSensitivity: s.highSensitivity,
-    smoothing: s.smoothing,
-    beatImpact: s.beatImpact,
+    bassSensitivity: 1,
+    midSensitivity: 1,
+    highSensitivity: 1,
+    smoothing: typeof params.smoothing === 'number' ? params.smoothing : 0.45,
+    beatImpact: 1,
     reducedMotion: resolveReducedMotion(s.reducedMotion, systemReducedMotion),
+    decay: typeof params.decay === 'number' ? params.decay : 1,
   });
 }
 
 export function setSystemReducedMotion(value: boolean): void {
   systemReducedMotion = value;
-  applySettings(useSettings.getState());
+  applySettings();
 }
 
-applySettings(useSettings.getState());
+applySettings();
 useSettings.subscribe(applySettings);
+useVisual.subscribe(applySettings);
 
 {
   const prefs = loadPlayerPrefs();
@@ -117,8 +132,10 @@ export async function loadFile(file: File): Promise<void> {
   let duration = 0;
   try {
     duration = (await engine.load(file)).duration;
+    currentFile = file;
   } catch (err) {
     if (err instanceof LoadCancelledError) return;
+    currentFile = null;
     usePlayer.setState({ status: 'error', error: (err as Error).message, track: null });
     return;
   }

@@ -29,6 +29,7 @@ export interface AudioFrame {
   rms: number;
   rmsDb: number;
   /** smoothed band levels, sensitivity applied; nominal 0..1, may reach ~1.6 */
+  sub: number;
   bass: number;
   mid: number;
   high: number;
@@ -67,6 +68,7 @@ export function createAudioFrame(): AudioFrame {
     activity: 0,
     rms: 0,
     rmsDb: -200,
+    sub: 0,
     bass: 0,
     mid: 0,
     high: 0,

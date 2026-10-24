@@ -8,7 +8,8 @@ import { analysisHub } from '../../audio/analysis/AnalysisHub';
 import { DISPLAY_BANDS, WAVE_POINTS, type AudioFrame } from '../../audio/analysis/frame';
 import { EventType } from '../../audio/dsp/events';
 import { Spring } from '../../audio/dsp/envelope';
-import { useSettings, type VisualSettings } from '../../state/settings';
+import { getScene } from '../../engine/scenes/registry';
+import { useVisual } from '../../state/visual';
 import { hash01 } from '../hash';
 import { setStageCanvas, useRuntime } from '../runtime';
 import { telemetry } from '../telemetry';
@@ -26,6 +27,30 @@ interface DrawState {
 }
 
 const ROWS = 34;
+
+/** The few look parameters the 2D fallback understands, read from the active scene. */
+interface Fallback2DSettings {
+  mode: 'pulse' | 'radial' | 'wave';
+  accent: string;
+  background: string;
+  intensity: number;
+  rotationSpeed: number;
+  particleDensity: number;
+}
+
+function fallbackSettings(): Fallback2DSettings {
+  const v = useVisual.getState();
+  const p = v.scenes[v.sceneId]?.params ?? {};
+  const num = (x: unknown, d: number) => (typeof x === 'number' ? x : d);
+  return {
+    mode: getScene(v.sceneId).fallback2D,
+    accent: typeof p.primary === 'string' ? p.primary : '#d4ff3a',
+    background: typeof p.background === 'string' ? p.background : '#050505',
+    intensity: num(p.motionIntensity, 1),
+    rotationSpeed: num(p.rotation, 1),
+    particleDensity: num(p.density, 0.6),
+  };
+}
 const RIDGE = new Float32Array(90 * 2);
 
 export function Canvas2DRenderer({ active }: { active: boolean }) {
@@ -65,7 +90,7 @@ export function Canvas2DRenderer({ active }: { active: boolean }) {
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       analysisHub.tick(now);
-      draw(ctx, canvas.width, canvas.height, analysisHub.frame, useSettings.getState(), state, motionRef.current);
+      draw(ctx, canvas.width, canvas.height, analysisHub.frame, fallbackSettings(), state, motionRef.current);
       telemetry.rotation = ((((state.spin * 180) / Math.PI) % 360) + 360) % 360;
       telemetry.tilt = 0;
       frames++;
@@ -86,7 +111,7 @@ export function Canvas2DRenderer({ active }: { active: boolean }) {
   return <canvas ref={canvasRef} className="stage-canvas2d" aria-hidden="true" />;
 }
 
-function draw(ctx: CanvasRenderingContext2D, w: number, h: number, f: AudioFrame, s: VisualSettings, st: DrawState, reduced: boolean) {
+function draw(ctx: CanvasRenderingContext2D, w: number, h: number, f: AudioFrame, s: Fallback2DSettings, st: DrawState, reduced: boolean) {
   const dt = f.dt;
   const motion = reduced ? 0.45 : 1;
   const I = s.intensity;

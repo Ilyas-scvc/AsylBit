@@ -1,0 +1,43 @@
+/** particleCloud — scene metadata and parameter schema (no three.js; the implementation is in ../particleCloud.ts). */
+import type { SceneDefinition } from '../../types';
+
+export const particleCloud: SceneDefinition = {
+  id: 'particle-cloud',
+  index: '06',
+  name: 'PARTICLE CLOUD',
+  short: 'PARTICLES',
+  description: 'GPU particle swarm morphing between cloud, spiral galaxy and sphere; every particle has its band.',
+  category: 'particles',
+  params: [
+    'scale',
+    { key: 'density', label: 'PARTICLE COUNT', default: 0.6 },
+    { key: 'shape', label: 'SHAPE · CLOUD › SPIRAL › SPHERE', group: 'geometry', type: 'number', min: 0, max: 2, step: 0.01, default: 0.9, modulatable: true },
+    { key: 'autoMorph', label: 'AUTO MORPH', group: 'animation', type: 'number', min: 0, max: 1, step: 0.01, default: 0, modulatable: false },
+    { key: 'arms', label: 'SPIRAL ARMS', group: 'geometry', type: 'number', min: 1, max: 8, step: 1, default: 3, modulatable: false },
+    { key: 'complexity', label: 'ARM TWIST' },
+    { key: 'deformation', label: 'TURBULENCE', default: 0.6 },
+    { key: 'particleSize', label: 'PARTICLE SIZE', group: 'geometry', type: 'number', min: 0.3, max: 3, step: 0.05, default: 1, modulatable: true },
+    { key: 'glow', label: 'PARTICLE BRIGHTNESS', group: 'geometry', type: 'number', min: 0, max: 3, step: 0.05, default: 1, modulatable: true },
+    'speed',
+    { key: 'rotation', label: 'VORTEX', default: 1 },
+    'motionIntensity',
+    'direction',
+    { key: 'tilt', label: 'CAMERA ANGLE', group: 'camera', type: 'number', min: -80, max: 80, step: 1, default: 22, modulatable: true, unit: '°' },
+    'zoom',
+    { key: 'fov', default: 50 },
+    'distance',
+    'cameraRotation',
+    'perspective',
+    { key: 'autoOrbit', default: 5 },
+    { key: 'gradient', default: 'frequency' },
+    { key: 'secondary', default: '#ff4fa3' },
+  ],
+  mapping: [
+    ['BANDS', 'EACH PARTICLE: ITS OWN BAND'],
+    ['KICK', 'BREATHING PULSE'],
+    ['MIDS', 'TURBULENCE'],
+    ['SHAPE', 'CLOUD › SPIRAL › SPHERE'],
+    ['VORTEX', 'DIFFERENTIAL ROTATION'],
+  ],
+  fallback2D: 'pulse',
+};

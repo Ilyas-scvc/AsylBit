@@ -3,6 +3,8 @@
  * Settings live in localStorage only — nothing is sent anywhere.
  */
 import { create } from 'zustand';
+import { isPerformancePreset, presetFromLegacyQuality } from '../engine/quality';
+import type { PerformancePreset } from '../engine/types';
 
 export type VisualMode = 'pulse' | 'radial' | 'wave';
 export type ReducedMotionSetting = 'auto' | 'on' | 'off';
@@ -23,6 +25,8 @@ export interface VisualSettings {
   reducedMotion: ReducedMotionSetting;
   fftSize: 2048 | 4096;
   quality: QualitySetting;
+  /** live-stage performance preset (BEAT//FORM 2.0) */
+  performance: PerformancePreset;
 }
 
 export type NumericSettingKey =
@@ -76,6 +80,7 @@ export const DEFAULT_SETTINGS: VisualSettings = {
   reducedMotion: 'auto',
   fftSize: 2048,
   quality: 'auto',
+  performance: 'balanced',
 };
 
 const STORAGE_KEY = 'beatform.settings.v1';
@@ -101,6 +106,7 @@ export function sanitizeSettings(raw: unknown): VisualSettings {
   if (src.reducedMotion === 'auto' || src.reducedMotion === 'on' || src.reducedMotion === 'off') out.reducedMotion = src.reducedMotion;
   if (src.fftSize === 2048 || src.fftSize === 4096) out.fftSize = src.fftSize;
   if (src.quality === 'auto' || src.quality === 'high' || src.quality === 'low') out.quality = src.quality;
+  out.performance = isPerformancePreset(src.performance) ? src.performance : presetFromLegacyQuality(src.quality);
   return out;
 }
 

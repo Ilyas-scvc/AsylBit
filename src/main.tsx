@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '@fontsource-variable/jetbrains-mono/wght.css';
 import '@fontsource-variable/archivo/wdth.css';
 import './styles/global.css';
+import './styles/v2.css';
 import App from './App';
 
 if (import.meta.env.DEV) {
@@ -15,7 +16,13 @@ if (import.meta.env.DEV) {
     import('./visual/runtime'),
     import('./export/exporter'),
     import('./state/exportState'),
-  ]).then(([controller, hub, player, settings, runtime, exporter, exportState]) => {
+    import('./state/visual'),
+    import('./state/ui'),
+    import('./export/studio'),
+    import('./export/capabilities'),
+    import('./export/plan'),
+    import('./visual/liveEngine'),
+  ]).then(([controller, hub, player, settings, runtime, exporter, exportState, visual, ui, studio, capabilities, plan, live]) => {
     (window as unknown as Record<string, unknown>).__beatform = {
       controller,
       hub: hub.analysisHub,
@@ -24,6 +31,12 @@ if (import.meta.env.DEV) {
       runtime: runtime.useRuntime,
       exporter,
       exportState: exportState.useExport,
+      visual,
+      ui: ui.useUi,
+      studio,
+      capabilities,
+      plan,
+      liveEngine: live.getLiveEngine,
     };
   });
 }

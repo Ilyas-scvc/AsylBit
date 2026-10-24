@@ -9,7 +9,7 @@
  *
  * Everything is allocated in `configure()`; `process()` does not allocate.
  */
-import { AIR_BAND, BASS, BODY_BAND, HIGH, KICK_BAND, LogBandMapper, MID, SNAP_BAND, bandBins, powerToDb, type BinSpan } from '../dsp/bands';
+import { AIR_BAND, BASS, BODY_BAND, HIGH, KICK_BAND, LogBandMapper, MID, SNAP_BAND, SUB, bandBins, powerToDb, type BinSpan } from '../dsp/bands';
 import { attackRelease, clamp } from '../dsp/envelope';
 import { AdaptiveOnsetTracker } from '../dsp/onset';
 import { DISPLAY_BANDS, WAVE_POINTS } from './frame';
@@ -75,6 +75,7 @@ export class RealtimeAnalyzer {
   // ---- outputs -------------------------------------------------------------------------
   rmsDb = -200;
   rms = 0;
+  sub = 0;
   bass = 0;
   mid = 0;
   high = 0;
@@ -106,8 +107,8 @@ export class RealtimeAnalyzer {
   private fluxPeak = 0.3;
   private kickPeak = 0.3;
 
-  private spans!: Record<'kick' | 'body' | 'snap' | 'air' | 'bass' | 'mid' | 'high', BinSpan>;
-  private readonly levels = { bass: new BandLevel(), mid: new BandLevel(), high: new BandLevel() };
+  private spans!: Record<'kick' | 'body' | 'snap' | 'air' | 'sub' | 'bass' | 'mid' | 'high', BinSpan>;
+  private readonly levels = { sub: new BandLevel(), bass: new BandLevel(), mid: new BandLevel(), high: new BandLevel() };
 
   private readonly kickTracker = new AdaptiveOnsetTracker({
     window: 1.0, lambda: 2, mu: 0.5, floor: 0.18, refractory: 0.11, riseDb: 3, riseWindow: 0.12, gateDb: -60, rearm: 0.5, warmup: 6,
@@ -143,6 +144,7 @@ export class RealtimeAnalyzer {
       body: span(BODY_BAND),
       snap: span(SNAP_BAND),
       air: span(AIR_BAND),
+      sub: span(SUB),
       bass: span(BASS),
       mid: span(MID),
       high: span(HIGH),
@@ -176,13 +178,14 @@ export class RealtimeAnalyzer {
   /** Full reset including levels (new track). */
   resetAll(): void {
     this.resetDetection();
+    this.levels.sub.reset();
     this.levels.bass.reset();
     this.levels.mid.reset();
     this.levels.high.reset();
     this.spectrum.fill(0);
     this.peaks.fill(0);
     this.waveform.fill(0);
-    this.bass = this.mid = this.high = this.flux = this.rms = 0;
+    this.sub = this.bass = this.mid = this.high = this.flux = this.rms = 0;
     this.rmsDb = -200;
     this.fluxPeak = 0.3;
     this.kickPeak = 0.3;
@@ -262,9 +265,11 @@ export class RealtimeAnalyzer {
     // ---- band levels -------------------------------------------------------------------
     const release = 0.06 + tuning.smoothing * 0.5;
     const attack = 0.008 + tuning.smoothing * 0.03;
+    const subDb = powerToDb(meanPower(spans.sub));
     const bassDb = powerToDb(meanPower(spans.bass));
     const midDb = powerToDb(meanPower(spans.mid));
     const highDb = powerToDb(meanPower(spans.high));
+    this.sub = Math.min(1.6, this.levels.sub.update(subDb, dt, attack, release * 1.3) * tuning.bassSensitivity);
     this.bass = Math.min(1.6, this.levels.bass.update(bassDb, dt, attack, release * 1.15) * tuning.bassSensitivity);
     this.mid = Math.min(1.6, this.levels.mid.update(midDb, dt, attack, release) * tuning.midSensitivity);
     this.high = Math.min(1.6, this.levels.high.update(highDb, dt, attack * 0.6, release * 0.7) * tuning.highSensitivity);
