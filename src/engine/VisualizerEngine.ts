@@ -13,12 +13,14 @@
  */
 import * as THREE from 'three';
 import type { AudioFrame } from '../audio/analysis/frame';
+import { resetCamera } from './camera';
 import { GRADIENT_INDEX, HexColor } from './colors';
-import { AudioFeatureProvider } from './features';
-import { ModulationEngine, type ModulationBinding } from './modulation';
-import { getSceneSchema, schemaMap, ValuesReader } from './params';
-import { EFFECT_MAP, budgetedEffects, type EffectInstance } from './post/effects';
+import type { AudioFeatureProvider } from './features';
+import type { ModulationBinding, ModulationEngine } from './modulation';
+import { getSceneSchema, schemaMap } from './params';
+import type { EffectInstance } from './post/effects';
 import { PostProcessingPipeline } from './post/pipeline';
+import { FrameResolver } from './resolve';
 import { SCENE_FACTORIES } from './scenes/factories';
 import { getScene } from './scenes/registry';
 import type { ParamDef, ParamValues, Palette, QualityProfile, SceneDefinition, SceneFrameContext, SceneInstance } from './types';
@@ -60,12 +62,15 @@ export class SceneController {
   constructor(
     private readonly scene: THREE.Scene,
     private readonly renderer: THREE.WebGLRenderer,
+    /** the camera all scenes share; reset on every switch so no scene inherits another's state */
+    private readonly camera?: THREE.PerspectiveCamera,
   ) {}
 
   setScene(id: string, quality: QualityProfile): boolean {
     const def = getScene(id);
     if (this.def === def && this.instance) return false;
     this.dispose();
+    if (this.camera) resetCamera(this.camera);
     this.def = def;
     const create = SCENE_FACTORIES[def.id];
     if (!create) throw new Error(`Scene "${def.id}" has no factory`);
@@ -97,8 +102,7 @@ export class VisualizerEngine {
   readonly camera = new THREE.PerspectiveCamera(35, 1, 0.05, 200);
   readonly controller: SceneController;
   readonly post: PostProcessingPipeline;
-  readonly modulation = new ModulationEngine();
-  readonly features = new AudioFeatureProvider();
+  readonly resolver = new FrameResolver();
   quality: QualityProfile;
   clock = 0;
   private width = 1;
@@ -106,10 +110,6 @@ export class VisualizerEngine {
   private pixelRatio = 1;
   private fade = 1;
   private readonly sceneFade: number;
-  private readonly reader = new ValuesReader();
-  private readonly resolved: ParamValues = {};
-  private readonly fxResolved: EffectInstance[] = [];
-  private readonly fxDefs = new Map<string, ParamDef>();
   private readonly palette: Palette = { primary: new THREE.Color(), secondary: new THREE.Color(), background: new THREE.Color(), gradient: 1 };
   private readonly hex = { primary: new HexColor(), secondary: new HexColor(), background: new HexColor() };
   private schemaFor: SceneDefinition | null = null;
@@ -129,7 +129,7 @@ export class VisualizerEngine {
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.autoClear = true;
-    this.controller = new SceneController(this.scene, this.renderer);
+    this.controller = new SceneController(this.scene, this.renderer, this.camera);
     this.post = new PostProcessingPipeline(this.renderer, this.quality);
   }
 
@@ -160,7 +160,7 @@ export class VisualizerEngine {
   /** Reset all accumulated state (exports start from here). */
   reset(): void {
     this.clock = 0;
-    this.modulation.reset();
+    this.resolver.reset();
     this.post.resetHistory();
     this.controller.rebuild(this.quality);
     this.fade = 1;
@@ -187,38 +187,23 @@ export class VisualizerEngine {
     const instance = this.controller.instance!;
     const defs = this.schema(def);
 
-    // base values → audio features (with the scene's audio settings) → modulation
-    for (const k of Object.keys(this.resolved)) if (!defs.has(k)) delete this.resolved[k];
-    for (const [k, d] of defs) this.resolved[k] = visual.params[k] ?? d.default;
-    this.reader.values = this.resolved;
-    const audio = this.features.build(input.frame, this.reader);
-    audio.time = input.time;
-    this.modulation.apply(visual.modulations, defs, visual.params, audio, input.time, dt, this.resolved);
+    // base values → source features → modulation → resolved values → scene features
+    const r = this.resolver;
+    const audio = r.resolve(defs, {
+      frame: input.frame,
+      time: input.time,
+      dt,
+      params: visual.params,
+      modulations: visual.modulations,
+      post: visual.post,
+      maxEffects: this.quality.maxEffects,
+    });
+    const resolved = r.values;
 
-    // post stack with its own modulated parameters
-    const fx = budgetedEffects(visual.post as EffectInstance[], this.quality.maxEffects);
-    this.fxResolved.length = 0;
-    this.fxDefs.clear();
-    const fxBase: ParamValues = {};
-    for (const e of fx) {
-      for (const d of EFFECT_MAP.get(e.type)?.params ?? []) {
-        const key = `fx:${e.id}:${d.key}`;
-        this.fxDefs.set(key, d);
-        fxBase[key] = e.params[d.key] ?? d.default;
-      }
-    }
-    const fxOut: ParamValues = { ...fxBase };
-    if (fx.length) this.modulation.apply(visual.modulations, this.fxDefs, fxBase, audio, input.time, dt, fxOut);
-    for (const e of fx) {
-      const params: ParamValues = {};
-      for (const d of EFFECT_MAP.get(e.type)?.params ?? []) params[d.key] = fxOut[`fx:${e.id}:${d.key}`];
-      this.fxResolved.push({ ...e, params });
-    }
-
-    this.palette.primary.copy(this.hex.primary.set(String(this.resolved.primary)));
-    this.palette.secondary.copy(this.hex.secondary.set(String(this.resolved.secondary)));
-    this.palette.background.copy(this.hex.background.set(String(this.resolved.background)));
-    this.palette.gradient = GRADIENT_INDEX[String(this.resolved.gradient)] ?? 1;
+    this.palette.primary.copy(this.hex.primary.set(String(resolved.primary)));
+    this.palette.secondary.copy(this.hex.secondary.set(String(resolved.secondary)));
+    this.palette.background.copy(this.hex.background.set(String(resolved.background)));
+    this.palette.gradient = GRADIENT_INDEX[String(resolved.gradient)] ?? 1;
     this.renderer.setClearColor(this.palette.background, 1);
 
     const ctx: SceneFrameContext = {
@@ -226,7 +211,7 @@ export class VisualizerEngine {
       clock: this.clock,
       dt,
       audio,
-      params: this.reader,
+      params: r.reader,
       palette: this.palette,
       camera: this.camera,
       width: this.width,
@@ -245,11 +230,11 @@ export class VisualizerEngine {
     this.post.render(
       this.scene,
       this.camera,
-      this.fxResolved,
+      r.effects,
       {
-        brightness: this.reader.num('brightness'),
-        contrast: this.reader.num('contrast'),
-        saturation: this.reader.num('saturation'),
+        brightness: r.reader.num('brightness'),
+        contrast: r.reader.num('contrast'),
+        saturation: r.reader.num('saturation'),
         fade: this.fade * this.fade * (3 - 2 * this.fade),
       },
       { time: input.time, clock: this.clock, dt, kick: audio.kick },
@@ -260,9 +245,19 @@ export class VisualizerEngine {
     return this.controller.instance?.telemetry;
   }
 
+  /** Modulation envelopes (the Inspector shows their level). */
+  get modulation(): ModulationEngine {
+    return this.resolver.modulation;
+  }
+
+  /** Audio features the scene received in the last frame. */
+  get features(): AudioFeatureProvider {
+    return this.resolver.features;
+  }
+
   /** Resolved (modulated) value of a parameter in the last frame, for the Inspector. */
   resolvedValue(key: string): number | undefined {
-    const v = this.resolved[key];
+    const v = this.resolver.values[key];
     return typeof v === 'number' ? v : undefined;
   }
 

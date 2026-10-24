@@ -20,6 +20,8 @@ export interface PlayerState {
   status: LoadStatus;
   error: string | null;
   track: TrackInfo | null;
+  /** increments with every file load, so views can tell a new track from a metadata update */
+  loadId: number;
   playing: boolean;
   buffering: boolean;
   loop: boolean;
@@ -40,6 +42,7 @@ export const usePlayer = create<PlayerState>()(() => ({
   status: 'empty',
   error: null,
   track: null,
+  loadId: 0,
   playing: false,
   buffering: false,
   loop: false,

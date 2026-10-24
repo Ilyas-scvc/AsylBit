@@ -1,6 +1,6 @@
 /** The user's saved presets (local only). */
 import { create } from 'zustand';
-import { addPreset, duplicatePreset, removePreset, renamePreset, updatePreset } from '../engine/presets/library';
+import { addPreset, duplicatePreset, importPresets, isLibraryFull, removePreset, renamePreset, updatePreset, type ImportOutcome } from '../engine/presets/library';
 import { migratePreset, type VisualPreset } from '../engine/presets/schema';
 
 const STORAGE_KEY = 'beatform.presets.v2';
@@ -23,17 +23,24 @@ function load(): VisualPreset[] {
 
 interface PresetStore {
   user: VisualPreset[];
-  add: (p: VisualPreset) => void;
+  /** false when the library is full (nothing is ever pushed out) */
+  add: (p: VisualPreset) => boolean;
   overwrite: (id: string, p: VisualPreset) => void;
   rename: (id: string, name: string) => void;
-  duplicate: (p: VisualPreset) => VisualPreset;
+  /** null when the library is full */
+  duplicate: (p: VisualPreset) => VisualPreset | null;
   remove: (id: string) => void;
-  importMany: (list: VisualPreset[]) => void;
+  importMany: (list: VisualPreset[]) => Omit<ImportOutcome, 'list'>;
 }
 
 export const usePresets = create<PresetStore>()((set, get) => ({
   user: load(),
-  add: (p) => set({ user: addPreset(get().user, p) }),
+  add: (p) => {
+    const list = get().user;
+    if (isLibraryFull(list) && !list.some((x) => x.id === p.id)) return false;
+    set({ user: addPreset(list, p) });
+    return true;
+  },
   overwrite: (id, p) => set({ user: updatePreset(get().user, id, p) }),
   rename: (id, name) => set({ user: renamePreset(get().user, id, name) }),
   duplicate: (p) => {
@@ -42,7 +49,11 @@ export const usePresets = create<PresetStore>()((set, get) => ({
     return copy;
   },
   remove: (id) => set({ user: removePreset(get().user, id) }),
-  importMany: (list) => set({ user: list.reduceRight((acc, p) => addPreset(acc, p), get().user) }),
+  importMany: (incoming) => {
+    const { list, ...outcome } = importPresets(get().user, incoming);
+    set({ user: list });
+    return outcome;
+  },
 }));
 
 if (typeof window !== 'undefined') {

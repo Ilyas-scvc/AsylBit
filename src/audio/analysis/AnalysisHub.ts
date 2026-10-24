@@ -24,8 +24,14 @@ export interface HubTuning extends AnalyzerTuning {
 
 /** Display pipeline delay (render + composite) that already offsets part of the audio latency. */
 const DISPLAY_LATENCY = 0.02;
-const MAX_COMPENSATION = 0.4;
-const DELAY_SLOTS = 64;
+export const MAX_COMPENSATION = 0.4;
+/** tick() ignores calls closer together than this, so it runs at most 250 times a second */
+const MIN_TICK_MS = 4;
+/**
+ * The delay line must still hold a result that is MAX_COMPENSATION old at the fastest tick
+ * rate (≈ 100 slots at 250 Hz; a 240 Hz display needs 96). Bounded: ~1.8 KB per slot.
+ */
+export const DELAY_SLOTS = Math.ceil((MAX_COMPENSATION * 1000) / MIN_TICK_MS) + 28;
 
 interface Slot {
   wall: number;
@@ -168,7 +174,7 @@ export class AnalysisHub {
 
   /** Run one analysis step. `now` is a performance.now()-style timestamp in ms. */
   tick(now: number): void {
-    if (this.lastNow !== 0 && now - this.lastNow < 4) return;
+    if (this.lastNow !== 0 && now - this.lastNow < MIN_TICK_MS) return;
     const dt = this.lastNow === 0 ? 1 / 60 : clamp((now - this.lastNow) / 1000, 0, 0.1);
     this.lastNow = now;
     const f = this.frame;

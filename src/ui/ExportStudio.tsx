@@ -15,6 +15,7 @@ import {
   audioBitrates,
   audioCodecFor,
   clampRange,
+  rangeForTrack,
   codecsFor,
   estimateBytes,
   estimateMemoryBytes,
@@ -27,6 +28,7 @@ import {
   type QualityLevel,
   type VideoCodecId,
 } from '../export/plan';
+import type { RenderPhase } from '../export/RenderController';
 import { cancelExport, discardResult, exportReducedMotion, onExportPreview, snapshotForExport, startExport, useStudio } from '../export/studio';
 import { usePlayer } from '../state/player';
 import { useSettings } from '../state/settings';
@@ -72,6 +74,13 @@ function Seg<T extends string | number>({
 }
 
 const fmtRate = (bps: number) => (bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MBPS` : `${Math.round(bps / 1000)} KBPS`);
+const PHASE_LABELS: Record<RenderPhase, string> = {
+  preparing: 'PREPARING',
+  prerolling: 'PRE-ROLL',
+  rendering: 'RENDERING',
+  finalizing: 'FINALIZING',
+  saving: 'SAVING',
+};
 const fmtDuration = (ms: number) => {
   const s = Math.round(ms / 1000);
   return s >= 60 ? `${Math.floor(s / 60)}M ${String(s % 60).padStart(2, '0')}S` : `${s}S`;
@@ -85,6 +94,7 @@ export function ExportStudio() {
   const playerStatus = usePlayer((s) => s.status);
   const analysis = usePlayer((s) => s.analysis);
   const track = usePlayer((s) => s.track);
+  const loadId = usePlayer((s) => s.loadId);
   const accent = useVisual((s) => String(s.scenes[s.sceneId]?.params.primary ?? '#d4ff3a'));
   const studio = useStudio();
 
@@ -109,16 +119,21 @@ export function ExportStudio() {
   const res = resolutions[Math.min(resIndex, resolutions.length - 1)];
   const audioCodec = audioCodecFor(container);
   const videoBps = useMemo(() => videoBitrate(codec, res.width, res.height, fps, quality), [quality, res, fps, codec]);
-  const span = rangeMode === 'full' ? { start: 0, end: duration } : range;
+  const span = rangeMode === 'full' ? { start: 0, end: duration } : clampRange(range.start, range.end, duration);
   const seconds = Math.max(0, span.end - span.start);
 
   // keep codec valid for the container
   useEffect(() => {
     if (!codecsFor(container).includes(codec)) setCodec(codecsFor(container)[0]);
   }, [container, codec]);
+  // a selection belongs to one track: reset it when another file is loaded, clamp it to the
+  // track otherwise (the export job is validated again in startExport)
+  const rangeLoad = useRef(-1);
   useEffect(() => {
-    if (duration > 0 && range.end === 0) setRange({ start: 0, end: Math.min(duration, 30) });
-  }, [duration, range.end]);
+    const same = rangeLoad.current === loadId;
+    rangeLoad.current = loadId;
+    setRange((r) => rangeForTrack(r, same, duration));
+  }, [loadId, duration]);
 
   // real capability checks for the current selection
   useEffect(() => {
@@ -246,16 +261,19 @@ export function ExportStudio() {
                 <div className="studio-progress" role="status">
                   <div className="studio-bar" style={{ ['--p' as string]: pct }} />
                   <span>
-                    {p.phase === 'preparing' ? 'PREPARING' : p.phase === 'prerolling' ? 'PRE-ROLL' : p.phase === 'finalizing' ? 'FINALIZING' : 'RENDERING'} · FRAME {p.frame} / {p.totalFrames}
+                    {PHASE_LABELS[p.phase]} · FRAME {p.frame} / {p.totalFrames}
                   </span>
                   <span className="dim">
                     {p.speed.toFixed(1)} FPS ({(p.speed / fps).toFixed(2)}× REALTIME) · {fmtDuration(p.elapsedMs)} ELAPSED · ~{fmtDuration(p.etaMs)} LEFT
-                    {/* an in-memory fast-start file is only written out when it is finalized */}
-                    {toDisk && p.bytes > 0 ? ` · ${formatBytes(p.bytes)} WRITTEN` : ''}
+                    {p.bytes > 0 ? ` · ${formatBytes(p.bytes)} ${toDisk ? 'WRITTEN (NOT SAVED YET)' : 'IN MEMORY'}` : ''}
                   </span>
-                  <button type="button" className="btn" onClick={cancelExport}>
-                    CANCEL
-                  </button>
+                  {p.phase === 'saving' ? (
+                    <span className="set-note">SAVING THE FINISHED FILE — THIS LAST STEP CANNOT BE CANCELLED</span>
+                  ) : (
+                    <button type="button" className="btn" onClick={cancelExport} disabled={studio.cancelRequested}>
+                      {studio.cancelRequested ? (p.phase === 'finalizing' ? 'CANCELLING AFTER FINALIZING…' : 'CANCELLING…') : 'CANCEL'}
+                    </button>
+                  )}
                 </div>
               )}
               {studio.status === 'done' && studio.result && (
@@ -279,7 +297,7 @@ export function ExportStudio() {
                 </div>
               )}
               {studio.status === 'error' && <p className="hero-error">EXPORT FAILED — {studio.error}</p>}
-              {studio.status === 'cancelled' && <p className="set-note">EXPORT CANCELLED. NOTHING WAS SAVED.</p>}
+              {studio.status === 'cancelled' && <p className="set-note">EXPORT CANCELLED. NOTHING WAS SAVED{toDisk ? ' — THE FILE ON DISK WAS LEFT AS IT WAS' : ''}.</p>}
             </div>
 
             <div className="studio-form">

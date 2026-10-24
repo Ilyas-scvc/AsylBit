@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { DISPLAY_BANDS } from '../../audio/analysis/frame';
 import { Spring } from '../../audio/dsp/envelope';
-import { effectiveFov } from '../camera';
+import { zoomedFov } from '../camera';
 import { gradientColor } from '../colors';
 import type { SceneEnv, SceneFrameContext, SceneFactory, SceneInstance } from '../types';
 import { directionSign, disposeTree, wrapDegrees } from './common';
@@ -203,7 +203,8 @@ class AudioTunnelScene implements SceneInstance {
     // ---- camera: inside the tunnel, looking along its axis -----------------------------
     const cam = ctx.camera;
     const roll = (p.num('cameraRotation') + p.num('autoOrbit') * ctx.clock) * DEG + Math.sin(this.sway * 0.7) * 0.05 * motion;
-    cam.fov = effectiveFov(p.num('fov'), 1) / Math.max(0.3, p.num('zoom'));
+    // ZOOM magnifies like a lens (tan scaling) — dividing the angle could reach 180° and flip the image
+    cam.fov = zoomedFov(p.num('fov'), p.num('zoom'));
     cam.near = 0.05;
     cam.far = length + 10;
     cam.position.set(0, 0, 0.6);

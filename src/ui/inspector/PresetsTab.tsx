@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { BUILTIN_PRESETS } from '../../engine/presets/builtins';
-import { SHARE_HASH_KEY, encodePresetForUrl, presetToJson, presetsFromJson, type VisualPreset } from '../../engine/presets/schema';
+import { MAX_USER_PRESETS, SHARE_HASH_KEY, encodePresetForUrl, presetBackupFiles, presetToJson, presetsFromFile, type VisualPreset } from '../../engine/presets/schema';
 import { getScene } from '../../engine/scenes/registry';
 import { useNotice } from '../../state/notice';
 import { usePresets } from '../../state/presets';
@@ -54,7 +54,14 @@ function PresetRow({ p, active, onLoad, user }: { p: VisualPreset; active: boole
             RENAME
           </button>
         )}
-        <button type="button" className="btn btn-mini" onClick={() => duplicate(p)} title="Duplicate into my presets">
+        <button
+          type="button"
+          className="btn btn-mini"
+          onClick={() => {
+            if (!duplicate(p)) useNotice.getState().show(`LIBRARY FULL (${MAX_USER_PRESETS} PRESETS) — DELETE ONE FIRST`);
+          }}
+          title="Duplicate into my presets"
+        >
           DUP
         </button>
         <button type="button" className="btn btn-mini" onClick={() => downloadText(`beatform-${slug(p.name)}.json`, presetToJson(p))} title="Export JSON">
@@ -89,7 +96,10 @@ export function PresetsTab() {
 
   const saveNew = () => {
     const snap = useVisual.getState().snapshot(name.trim() || `${presetName ?? 'MY PRESET'}`);
-    usePresets.getState().add(snap);
+    if (!usePresets.getState().add(snap)) {
+      notice(`LIBRARY FULL (${MAX_USER_PRESETS} PRESETS) — DELETE OR OVERWRITE ONE FIRST`);
+      return;
+    }
     useVisual.setState({ presetId: snap.id, presetName: snap.name, dirty: false });
     setName('');
     notice(`SAVED "${snap.name}"`);
@@ -120,9 +130,23 @@ export function PresetsTab() {
   };
 
   const importFile = async (file: File) => {
-    const { presets, errors } = presetsFromJson(await file.text());
-    if (presets.length) usePresets.getState().importMany(presets);
-    notice(presets.length ? `IMPORTED ${presets.length} PRESET${presets.length > 1 ? 'S' : ''}${errors.length ? ` · ${errors.length} REJECTED` : ''}` : `IMPORT FAILED — ${errors[0] ?? 'NO PRESETS'}`);
+    const { presets, errors } = await presetsFromFile(file);
+    if (!presets.length) {
+      notice(`IMPORT FAILED — ${errors[0] ?? 'NO PRESETS'}`);
+      return;
+    }
+    const r = usePresets.getState().importMany(presets);
+    const parts = [`IMPORTED ${r.added} PRESET${r.added === 1 ? '' : 'S'}`];
+    if (r.duplicates) parts.push(`${r.duplicates} ALREADY IN THE LIBRARY`);
+    if (r.overflow) parts.push(`${r.overflow} NOT ADDED — LIBRARY FULL (${MAX_USER_PRESETS})`);
+    if (errors.length) parts.push(`${errors.length} REJECTED`);
+    notice(parts.join(' · '));
+  };
+
+  const exportAll = () => {
+    const files = presetBackupFiles(user);
+    files.forEach((json, i) => downloadText(files.length === 1 ? 'beatform-presets.json' : `beatform-presets-${i + 1}-of-${files.length}.json`, json));
+    if (files.length > 1) notice(`BACKUP SPLIT INTO ${files.length} FILES — IMPORT EACH OF THEM`);
   };
 
   return (
@@ -160,7 +184,7 @@ export function PresetsTab() {
             IMPORT JSON
           </button>
           {user.length > 0 && (
-            <button type="button" className="btn btn-mini" onClick={() => downloadText('beatform-presets.json', presetToJson(user))}>
+            <button type="button" className="btn btn-mini" onClick={exportAll}>
               EXPORT ALL
             </button>
           )}

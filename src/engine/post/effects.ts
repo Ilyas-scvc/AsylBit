@@ -168,9 +168,37 @@ export function moveEffect(stack: EffectInstance[], id: string, delta: number): 
   return out;
 }
 
+/**
+ * Each MOTION TRAILS instance keeps its own full-size history (two half-float targets, ~133 MB
+ * at 4K), so at most this many render; further ones in a stack (e.g. an imported preset) are
+ * bypassed and marked as such in the FX tab.
+ */
+export const MAX_TRAILS = 2;
+
+export type EffectStatus = 'active' | 'off' | 'budget' | 'trails-limit';
+
+/** Why each effect of a stack does or does not render (top to bottom). */
+export function effectStatus(stack: EffectInstance[], maxEffects: number): Map<string, EffectStatus> {
+  const out = new Map<string, EffectStatus>();
+  let slots = 0;
+  let trails = 0;
+  for (const e of stack) {
+    if (!e.enabled) out.set(e.id, 'off');
+    else if (e.type === 'trails' && trails >= MAX_TRAILS) out.set(e.id, 'trails-limit');
+    else if (slots >= maxEffects) out.set(e.id, 'budget');
+    else {
+      out.set(e.id, 'active');
+      slots++;
+      if (e.type === 'trails') trails++;
+    }
+  }
+  return out;
+}
+
 /** Which effects actually render under a quality budget (the rest are skipped, in order). */
 export function budgetedEffects(stack: EffectInstance[], maxEffects: number): EffectInstance[] {
-  return stack.filter((e) => e.enabled).slice(0, maxEffects);
+  const status = effectStatus(stack, maxEffects);
+  return stack.filter((e) => status.get(e.id) === 'active');
 }
 
 /** Modulation target key for an effect parameter. */

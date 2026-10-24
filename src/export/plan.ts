@@ -144,14 +144,44 @@ export function audioSampleRange(start: number, end: number, sampleRate: number)
 }
 
 /** Clamp a requested range to the track, keeping a minimum length. */
-export function clampRange(start: number, end: number, duration: number, minLength = 0.5): { start: number; end: number } {
-  const d = Math.max(minLength, duration);
-  let s = Math.min(Math.max(0, start), Math.max(0, d - minLength));
-  let e = Math.min(Math.max(end, s + minLength), d);
-  if (e - s < minLength) s = Math.max(0, e - minLength);
-  s = Math.round(s * 1000) / 1000;
-  e = Math.round(e * 1000) / 1000;
+/** Shortest exported fragment (s); a track shorter than this is exported whole. */
+export const MIN_EXPORT_SECONDS = 0.5;
+
+/**
+ * Keep a range inside [0, duration] and at least `minLength` long (or the whole track when it
+ * is shorter than that). Rounded to milliseconds, never past the end of the track.
+ */
+export function clampRange(start: number, end: number, duration: number, minLength = MIN_EXPORT_SECONDS): { start: number; end: number } {
+  const d = Number.isFinite(duration) ? Math.max(0, duration) : 0;
+  const min = Math.min(minLength, d);
+  const s0 = Number.isFinite(start) ? start : 0;
+  const e0 = Number.isFinite(end) ? end : d;
+  let s = Math.min(Math.max(0, s0), d - min);
+  let e = Math.min(Math.max(e0, s + min), d);
+  if (e - s < min) s = Math.max(0, e - min);
+  s = Math.max(0, Math.round(s * 1000) / 1000);
+  e = Math.min(d, Math.round(e * 1000) / 1000);
   return { start: s, end: e };
+}
+
+/**
+ * The range an export may actually use for a track of `duration` seconds: clamped to the
+ * track, or null when there is nothing to export. Guards against a stale selection (e.g. a
+ * range chosen on a longer, since replaced track).
+ */
+export function exportRange(start: number, end: number, duration: number): { start: number; end: number } | null {
+  if (!(duration > 0)) return null;
+  const r = clampRange(start, end, duration);
+  return r.end > r.start ? r : null;
+}
+
+/**
+ * The selection to show after the loaded track changed: kept (clamped) for the same track,
+ * reset to the first 30 s for a different one.
+ */
+export function rangeForTrack(previous: { start: number; end: number }, sameTrack: boolean, duration: number): { start: number; end: number } {
+  if (!(duration > 0)) return { start: 0, end: 0 };
+  return sameTrack && previous.end > previous.start ? clampRange(previous.start, previous.end, duration) : clampRange(0, Math.min(duration, 30), duration);
 }
 
 export function estimateBytes(videoBps: number, audioBps: number, seconds: number): number {

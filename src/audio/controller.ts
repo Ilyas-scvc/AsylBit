@@ -123,6 +123,7 @@ export async function loadFile(file: File): Promise<void> {
     duration: 0,
     lastSeek: 0,
     track: { name: file.name, size: file.size, type: check.mime, extension: check.extension, duration: 0 },
+    loadId: usePlayer.getState().loadId + 1,
     analysis: null,
     analysisStatus: 'idle',
     analysisProgress: 0,

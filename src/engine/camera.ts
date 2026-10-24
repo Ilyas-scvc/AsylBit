@@ -39,6 +39,28 @@ export function effectiveFov(fov: number, perspective: number): number {
   return 8 + (fov - 8) * Math.min(1, Math.max(0, perspective));
 }
 
+/**
+ * Field of view of a lens zoom: magnifies the image by `zoom` (like PerspectiveCamera.zoom)
+ * by scaling tan(fov/2), so it never reaches or passes 180°. Clamped to a usable range.
+ */
+export function zoomedFov(fovDeg: number, zoom: number): number {
+  const z = Math.max(0.05, zoom);
+  const fov = (2 * Math.atan(Math.tan((Math.min(179, Math.max(1, fovDeg)) * DEG) / 2) / z)) / DEG;
+  return Math.min(170, Math.max(1, fov));
+}
+
+/** Neutral state of the shared camera, applied when a scene takes over. */
+export function resetCamera(cam: THREE.PerspectiveCamera): void {
+  cam.fov = 35;
+  cam.zoom = 1;
+  cam.near = 0.05;
+  cam.far = 200;
+  cam.position.set(0, 0, 6);
+  cam.up.set(0, 1, 0);
+  cam.lookAt(ORIGIN);
+  cam.updateProjectionMatrix();
+}
+
 export function applyCamera(ctx: SceneFrameContext, rig: CameraRig): { azimuth: number; elevation: number; distance: number } {
   const p = ctx.params;
   const cam = ctx.camera;

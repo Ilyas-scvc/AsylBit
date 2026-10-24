@@ -63,6 +63,11 @@ export class AudioEngine {
   private streamDest: MediaStreamAudioDestinationNode | null = null;
   private objectUrl: string | null = null;
   private loadToken = 0;
+  /**
+   * Bumped by every pause / load / unload: a play() still waiting for the AudioContext to
+   * resume only starts the element if no such command came in meanwhile.
+   */
+  private playIntent = 0;
   private listeners = new Set<(e: EngineEvent) => void>();
   private pendingPlay: Promise<void> | null = null;
   private volume = 0.85;
@@ -155,7 +160,7 @@ export class AudioEngine {
    */
   load(file: Blob): Promise<LoadedMedia> {
     const token = ++this.loadToken;
-    this.pendingPlay = null;
+    this.cancelPendingPlay();
     const audio = this.audio;
     if (!audio.paused) audio.pause();
     const previousUrl = this.objectUrl;
@@ -192,7 +197,7 @@ export class AudioEngine {
   /** Remove the current file and free its object URL. */
   unload(): void {
     this.loadToken++;
-    this.pendingPlay = null;
+    this.cancelPendingPlay();
     const audio = this.audio;
     audio.pause();
     audio.removeAttribute('src');
@@ -216,11 +221,14 @@ export class AudioEngine {
     if (this.pendingPlay) return this.pendingPlay;
     const ctx = this.ensureContext();
     const resume = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
-    const token = this.loadToken;
-    const run = (async () => {
+    const intent = this.playIntent;
+    // assigned before the body passes its first await, i.e. before `finally` can run
+    let run: Promise<void> | null = null;
+    run = (async () => {
       try {
         await resume;
-        if (token !== this.loadToken) return;
+        // paused, another file loaded or the engine disposed while the context resumed
+        if (intent !== this.playIntent) return;
         if (this.audio.ended) this.audio.currentTime = 0;
         await this.audio.play();
       } catch (err) {
@@ -228,20 +236,27 @@ export class AudioEngine {
         this.emit({ type: 'error', message: (err as DOMException)?.name === 'NotAllowedError' ? 'PLAYBACK BLOCKED — CLICK PLAY AGAIN' : 'PLAYBACK FAILED' });
         throw err;
       } finally {
-        this.pendingPlay = null;
+        // a newer play() may have replaced this one; never clear that
+        if (this.pendingPlay === run) this.pendingPlay = null;
       }
     })();
     this.pendingPlay = run;
     return run;
   }
 
+  /** Forget any play() still waiting for the AudioContext. */
+  private cancelPendingPlay(): void {
+    this.playIntent++;
+    this.pendingPlay = null;
+  }
+
   pause(): void {
+    this.cancelPendingPlay();
     this.audio.pause();
   }
 
   toggle(): Promise<void> | void {
     if (this.isPlaying || this.pendingPlay) {
-      this.pendingPlay = null;
       this.pause();
       return;
     }

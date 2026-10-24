@@ -2,13 +2,21 @@
  * PostProcessingPipeline: renders the scene into an off-screen target, runs the enabled
  * effects in stack order through a ping-pong pair, then grades the result to the screen.
  *
- * Render targets are pooled and fixed in number — scene, 2 × ping-pong, 2 × trail history
- * and a bloom chain of at most 5 levels — so adding effects never allocates more targets.
+ * Render targets are pooled — scene, 2 × ping-pong and a bloom chain of at most 5 levels —
+ * plus one 2-target history per MOTION TRAILS instance (at most MAX_TRAILS). State that
+ * belongs to one effect (trail history, kaleidoscope spin) is kept per effect id, so repeated
+ * effects animate independently, and is released as soon as that effect stops rendering.
  * All animated effects take time as a uniform, which keeps exports reproducible.
  */
 import * as THREE from 'three';
 import type { QualityProfile } from '../types';
+import { EffectStates } from './effectState';
 import type { EffectInstance } from './effects';
+
+interface TrailState {
+  targets: THREE.WebGLRenderTarget[];
+  fresh: boolean;
+}
 
 const VERT = /* glsl */ `
 varying vec2 vUv;
@@ -278,13 +286,18 @@ export class PostProcessingPipeline {
   private height = 1;
   private sceneRT: THREE.WebGLRenderTarget | null = null;
   private ping: THREE.WebGLRenderTarget[] = [];
-  private trails: THREE.WebGLRenderTarget[] = [];
-  private trailsFresh = true;
+  private readonly trails = new EffectStates<TrailState>(
+    () => {
+      const [w, h] = this.postSize();
+      return { targets: [this.makeTarget(w, h, { type: this.floatType }), this.makeTarget(w, h, { type: this.floatType })], fresh: true };
+    },
+    (t) => t.targets.forEach((rt) => rt.dispose()),
+  );
+  private readonly kaleido = new EffectStates<{ angle: number }>(() => ({ angle: 0 }));
+  private readonly activeIds = new Set<string>();
   private bloom: THREE.WebGLRenderTarget[] = [];
   private bloomUp: THREE.WebGLRenderTarget[] = [];
   private readonly floatType: THREE.TextureDataType;
-  private trailsAngle = 0;
-  private kaleidoAngle = 0;
 
   private readonly mats = {
     copy: makeMaterial(COPY_FRAG, { tSrc: { value: null } }),
@@ -332,7 +345,9 @@ export class PostProcessingPipeline {
 
   /** Number of render targets currently allocated (for diagnostics / tests). */
   get targetCount(): number {
-    return (this.sceneRT ? 1 : 0) + this.ping.length + this.trails.length + this.bloom.length + this.bloomUp.length;
+    let trails = 0;
+    for (const t of this.trails.values()) trails += t.targets.length;
+    return (this.sceneRT ? 1 : 0) + this.ping.length + trails + this.bloom.length + this.bloomUp.length;
   }
 
   setQuality(q: QualityProfile): void {
@@ -353,9 +368,8 @@ export class PostProcessingPipeline {
 
   /** Forget feedback history (scene switch, seek in an export, etc.). */
   resetHistory(): void {
-    this.trailsFresh = true;
-    this.trailsAngle = 0;
-    this.kaleidoAngle = 0;
+    for (const t of this.trails.values()) t.fresh = true;
+    this.kaleido.clear();
   }
 
   private postSize(): [number, number] {
@@ -373,16 +387,12 @@ export class PostProcessingPipeline {
     });
   }
 
-  private ensureTargets(needBloom: boolean, needTrails: boolean): void {
+  private ensureTargets(needBloom: boolean): void {
     const [w, h] = this.postSize();
     if (!this.sceneRT) {
       this.sceneRT = this.makeTarget(w, h, { depthBuffer: true, samples: this.quality.msaa });
     }
     if (this.ping.length === 0) this.ping = [this.makeTarget(w, h, { type: this.floatType }), this.makeTarget(w, h, { type: this.floatType })];
-    if (needTrails && this.trails.length === 0) {
-      this.trails = [this.makeTarget(w, h, { type: this.floatType }), this.makeTarget(w, h, { type: this.floatType })];
-      this.trailsFresh = true;
-    }
     if (needBloom && this.bloom.length === 0) {
       let bw = Math.max(1, w >> 1);
       let bh = Math.max(1, h >> 1);
@@ -398,12 +408,11 @@ export class PostProcessingPipeline {
   private releaseTargets(): void {
     this.sceneRT?.dispose();
     this.sceneRT = null;
-    for (const t of [...this.ping, ...this.trails, ...this.bloom, ...this.bloomUp]) t.dispose();
+    for (const t of [...this.ping, ...this.bloom, ...this.bloomUp]) t.dispose();
     this.ping = [];
-    this.trails = [];
+    this.trails.clear();
     this.bloom = [];
     this.bloomUp = [];
-    this.trailsFresh = true;
   }
 
   private pass(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null): void {
@@ -420,17 +429,20 @@ export class PostProcessingPipeline {
   render(scene: THREE.Scene, camera: THREE.Camera, effects: EffectInstance[], grade: GradeSettings, frame: PostFrame): void {
     const r = this.renderer;
     if (this.isDirect(effects, grade)) {
+      // no effect renders: release what the last ones kept (trail histories, spin angles)
+      if (this.trails.size) this.trails.clear();
+      if (this.kaleido.size) this.kaleido.clear();
       r.setRenderTarget(null);
       r.render(scene, camera);
       return;
     }
     const needBloom = effects.some((e) => e.type === 'bloom');
-    const needTrails = effects.some((e) => e.type === 'trails');
-    this.ensureTargets(needBloom, needTrails);
-    if (!needTrails && this.trails.length) {
-      for (const t of this.trails) t.dispose();
-      this.trails = [];
-    }
+    this.ensureTargets(needBloom);
+    // per-effect state lives only as long as its effect renders
+    this.activeIds.clear();
+    for (const e of effects) this.activeIds.add(e.id);
+    this.trails.retain(this.activeIds);
+    this.kaleido.retain(this.activeIds);
     const [w, h] = this.postSize();
     const aspect = w / h;
 
@@ -484,29 +496,29 @@ export class PostProcessingPipeline {
           break;
         }
         case 'trails': {
-          if (this.trails.length < 2) break;
-          const [read, write] = this.trails;
+          const history = this.trails.get(e.id);
+          const [read, write] = history.targets;
           const u = this.mats.trails.uniforms;
           u.tSrc.value = src;
           u.tHistory.value = read.texture;
-          u.uPersistence.value = this.trailsFresh ? 0 : Math.pow(n('persistence'), frame.dt * 60);
+          u.uPersistence.value = history.fresh ? 0 : Math.pow(n('persistence'), frame.dt * 60);
           u.uZoom.value = n('zoom') * frame.dt * 60;
-          this.trailsAngle = ((n('rotate') * Math.PI) / 180) * frame.dt;
-          u.uAngle.value = this.trailsAngle;
+          u.uAngle.value = ((n('rotate') * Math.PI) / 180) * frame.dt;
           u.uAdd.value = p.blend === 'add' ? 1 : 0;
           u.uAspect.value = aspect;
           this.pass(this.mats.trails, write);
-          this.trails = [write, read];
-          this.trailsFresh = false;
+          history.targets = [write, read];
+          history.fresh = false;
           src = write.texture;
           break;
         }
         case 'kaleidoscope': {
-          this.kaleidoAngle += ((n('spin') * Math.PI) / 180) * frame.dt;
+          const spin = this.kaleido.get(e.id);
+          spin.angle += ((n('spin') * Math.PI) / 180) * frame.dt;
           const u = this.mats.kaleidoscope.uniforms;
           u.tSrc.value = src;
           u.uSegments.value = Math.max(2, Math.round(n('segments')));
-          u.uAngle.value = (n('rotation') * Math.PI) / 180 + this.kaleidoAngle;
+          u.uAngle.value = (n('rotation') * Math.PI) / 180 + spin.angle;
           u.uZoom.value = Math.max(0.05, n('zoom'));
           u.uAspect.value = aspect;
           const dst = next();

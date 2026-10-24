@@ -237,9 +237,11 @@ class ReactiveMeshScene implements SceneInstance {
     const intensity = p.num('motionIntensity');
     const speed = p.num('speed');
 
-    const n = Math.max(24, Math.round(24 + p.num('density') * (this.maxN - 24) * Math.min(1.4, ctx.quality.particles + 0.4)));
+    // the size that is built is the size that is compared — otherwise a capped grid rebuilds every frame
+    const wanted = Math.round(24 + p.num('density') * (this.maxN - 24) * Math.min(1.4, ctx.quality.particles + 0.4));
+    const n = Math.min(this.maxN + 40, Math.max(24, wanted));
     const lineStep = Math.max(1, Math.round(1 + (1 - p.num('lineDensity')) * 5));
-    if (n !== this.gridN || lineStep !== this.gridStep) this.build(Math.min(n, this.maxN + 40), lineStep);
+    if (n !== this.gridN || lineStep !== this.gridStep) this.build(n, lineStep);
 
     // waterfall history: one spectrum row every 1/30 s of (speed-scaled) time
     this.timer += dt * Math.max(0.05, speed);

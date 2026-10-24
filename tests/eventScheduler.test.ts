@@ -66,3 +66,48 @@ describe('EventScheduler', () => {
     expect(lowerBoundAfter(map.times, 10)).toBe(6);
   });
 });
+
+describe('EventScheduler — an event at the very start of the track (t = 0)', () => {
+  const startMap: EventMap = {
+    times: new Float32Array([0, 0.1, 0.6, 1.2]),
+    strengths: new Float32Array([1, 1, 1, 1]),
+    types: new Uint8Array([0, 0, 0, 0]),
+  };
+  // event times are stored as float32
+  const f32 = (xs: number[]) => xs.map(Math.fround);
+  const frames = (from: number, to: number, fps = 60) => {
+    const out: number[] = [];
+    for (let n = 0; from + n / fps <= to + 1e-9; n++) out.push(from + n / fps);
+    return out;
+  };
+
+  it('fires the event at 0 exactly once when playback starts from the beginning', () => {
+    const s = new EventScheduler();
+    s.setMap(startMap, 0);
+    // the audible clock may sit at 0 for a few frames (latency) before moving
+    expect(collect(s, [0, 0, 0, ...frames(1 / 60, 0.2)])).toEqual(f32([0, 0.1]));
+  });
+
+  it('fires it once again after a loop restart / seek to 0, never twice', () => {
+    const s = new EventScheduler();
+    s.setMap(startMap, 0);
+    collect(s, frames(0, 0.7));
+    s.reset(0); // loop restart (the media element seeks to 0)
+    expect(collect(s, [0, ...frames(1 / 60, 0.2)])).toEqual(f32([0, 0.1]));
+  });
+
+  it('pausing and resuming does not repeat the start event', () => {
+    const s = new EventScheduler();
+    s.setMap(startMap, 0);
+    expect(collect(s, frames(0, 0.05))).toEqual(f32([0]));
+    for (let i = 0; i < 5; i++) s.reset(0.05); // the hub glues the cursor to the paused playhead
+    expect(collect(s, frames(0.05, 0.2))).toEqual(f32([0.1]));
+  });
+
+  it('a seek to a non-zero position still skips everything before it', () => {
+    const s = new EventScheduler();
+    s.setMap(startMap, 0);
+    s.reset(Math.fround(0.1)); // seek exactly onto an event: the region up to it was skipped
+    expect(collect(s, frames(0.1 + 1 / 60, 0.7))).toEqual(f32([0.6]));
+  });
+});
