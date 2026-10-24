@@ -429,3 +429,6 @@ Cloudflare устанавливает зависимости по `package.json`
 Папки `node_modules/`, `dist/`, `.exports/`, `.claude/` и файлы `.env*` (кроме безопасного `.env.example`) не отправляются в GitHub. После подключения каждый push в `main` запускает новую публикацию.
 
 Документация: https://developers.cloudflare.com/pages/get-started/git-integration/
+
+Copyright (c) 2026 Ilyas-scvc. All rights reserved.
+Этот код является собственностью автора. Копирование, модификация и коммерческое использование без письменного разрешения запрещены.
