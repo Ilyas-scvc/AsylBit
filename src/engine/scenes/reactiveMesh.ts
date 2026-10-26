@@ -6,7 +6,8 @@
  * ("waterfall"), and the vertex shader combines it with travelling waves:
  *
  *   bass   → broad circular swells travelling outward (moving peaks)
- *   kick   → an expanding ring wave from the centre
+ *   kick   → an expanding ring wave from the centre; each kick adds its own ring, earlier
+ *            rings keep travelling and fade out (kickWaves.ts), the sum is soft-limited
  *   mids   → local wave interference across the surface
  *   treble → fine, fast surface detail
  *
@@ -18,9 +19,12 @@ import { applyCamera } from '../camera';
 import { GLSL_GRADIENT } from '../colors';
 import type { SceneEnv, SceneFrameContext, SceneFactory, SceneInstance } from '../types';
 import { SIMPLEX_NOISE_3D, directionSign, disposeTree, wrapDegrees } from './common';
+import { KICK_WAVE, KickWaves } from './kickWaves';
 
 const HISTORY = 64;
 const PUSH_INTERVAL = 1 / 30;
+const WAVES = KICK_WAVE.slots;
+const glsl = (x: number) => x.toFixed(4);
 
 const VERT = /* glsl */ `
 uniform sampler2D uHistory;
@@ -36,8 +40,9 @@ uniform float uPhase;
 uniform float uBass;
 uniform float uMids;
 uniform float uTreble;
-uniform float uKickAge;
-uniform float uKickAmp;
+// kick rings: x = radius of the ring, y = its current amplitude (attack / decay applied)
+uniform vec2 uWaves[${WAVES}];
+uniform int uWaveCount;
 uniform float uIdle;
 uniform float uPointScale;
 uniform float uDotSize;
@@ -52,6 +57,24 @@ float spectrumAt(float freq, float age) {
   // seamless when a new row is pushed (uHead+1, uFrac→0)
   float row = mod(uHead + uFrac - 1.0 - age * ${HISTORY - 2}.0 + ${HISTORY}.0, ${HISTORY}.0);
   return texture2D(uHistory, vec2(freq, (row + 0.5) / ${HISTORY}.0)).r * 1.3;
+}
+
+// overlapping rings: linear up to the knee, then eased toward the ceiling (= softLimit())
+float softLimit(float x) {
+  if (x <= ${glsl(KICK_WAVE.knee)}) return x;
+  float r = ${glsl(KICK_WAVE.ceiling - KICK_WAVE.knee)};
+  float e = exp(-2.0 * (x - ${glsl(KICK_WAVE.knee)}) / r);
+  return ${glsl(KICK_WAVE.knee)} + r * (1.0 - e) / (1.0 + e);
+}
+
+float kickRings(float radial) {
+  float sum = 0.0;
+  for (int i = 0; i < ${WAVES}; i++) {
+    if (i >= uWaveCount) break;
+    float d = (radial - uWaves[i].x) * ${glsl(KICK_WAVE.sharpness)};
+    sum += exp(-d * d) * uWaves[i].y;
+  }
+  return softLimit(sum);
 }
 
 void main() {
@@ -87,9 +110,8 @@ void main() {
   float relief = pow(spec, 1.3) * (1.15 - 0.6 * freq);
   // bass: circular swells travelling outward
   relief += uBass * 0.55 * sin(radial * 7.0 - uPhase * 2.2) * (1.0 - radial * 0.5);
-  // kick: an expanding ring
-  float ring = exp(-pow((radial - uKickAge * 0.9) * 7.0, 2.0)) * uKickAmp * (1.0 - smoothstep(0.6, 1.2, uKickAge));
-  relief += ring * 0.9;
+  // kick: every kick's ring keeps expanding and fading on its own
+  relief += kickRings(radial) * 0.9;
   // mids: local interference
   float n = snoise(vec3(p.xz * (1.4 + uComplexity * 2.0) / uSize, uPhase * 0.6));
   relief += n * uMids * 0.35;
@@ -155,8 +177,8 @@ class ReactiveMeshScene implements SceneInstance {
   private phase = 0;
   private spin = 0;
   private kickSeen = -1;
-  private kickAge = 9;
-  private kickAmp = 0;
+  readonly waves = new KickWaves();
+  private readonly waveData = new Float32Array(WAVES * 2);
   private readonly maxN: number;
 
   constructor(env: SceneEnv) {
@@ -181,8 +203,9 @@ class ReactiveMeshScene implements SceneInstance {
       uBass: { value: 0 },
       uMids: { value: 0 },
       uTreble: { value: 0 },
-      uKickAge: { value: 9 },
-      uKickAmp: { value: 0 },
+      // shared by both materials: written once per frame
+      uWaves: { value: this.waveData },
+      uWaveCount: { value: 0 },
       uIdle: { value: 1 },
       uPointScale: { value: 1 },
       uDotSize: { value: 2 },
@@ -253,15 +276,16 @@ class ReactiveMeshScene implements SceneInstance {
       this.history.needsUpdate = true;
     }
 
+    // a kick adds a ring; rings already running keep their own age and amplitude. Running rings
+    // advance first, so a new one starts at age 0 whatever the frame rate. kickPeak is 0 with
+    // KICK IMPACT 0 or a closed noise gate, so no ring then.
+    this.waves.step(dt, Math.max(0.2, speed));
     if (a.kickCount !== this.kickSeen) {
       const first = this.kickSeen < 0;
       this.kickSeen = a.kickCount;
-      if (!first) {
-        this.kickAge = 0;
-        this.kickAmp = Math.min(1.2, a.kick + 0.3);
-      }
+      if (!first) this.waves.hit(a.kickPeak);
     }
-    this.kickAge += dt * Math.max(0.2, speed);
+    const waveCount = this.waves.write(this.waveData, motion);
 
     this.phase += dt * (0.6 + 0.9 * a.mids * a.activity) * motion * speed * directionSign(p.str('direction'));
     this.spin += dt * 0.05 * p.num('rotation') * motion * directionSign(p.str('direction'));
@@ -282,8 +306,7 @@ class ReactiveMeshScene implements SceneInstance {
       u.uBass.value = a.bass * intensity * motion;
       u.uMids.value = a.mids * intensity * motion;
       u.uTreble.value = a.treble * intensity * motion;
-      u.uKickAge.value = this.kickAge;
-      u.uKickAmp.value = this.kickAmp * motion;
+      u.uWaveCount.value = waveCount;
       u.uIdle.value = 1 - a.activity;
       u.uPointScale.value = ctx.height / 900;
       u.uDotSize.value = 2.2 * p.num('dotSize');

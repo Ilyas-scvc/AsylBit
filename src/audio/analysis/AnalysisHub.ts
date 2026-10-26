@@ -125,6 +125,7 @@ export class AnalysisHub {
     f.log.size = 0;
     f.log.head = 0;
     f.lastTime.fill(-1);
+    f.lastPeak.fill(0);
     f.time = 0;
   }
 
@@ -151,6 +152,7 @@ export class AnalysisHub {
     }
     f.counts[type]++;
     f.lastStrength[type] = strength;
+    f.lastPeak[type] = s;
     f.lastTime[type] = at;
     pushLog(f, type, at, strength);
   };

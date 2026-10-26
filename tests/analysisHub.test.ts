@@ -255,3 +255,33 @@ describe('AnalysisHub — an event at the very start of the track', () => {
     expect(s.kicks()).toBe(0);
   });
 });
+
+describe('AnalysisHub — kick peak for one-shot reactions', () => {
+  it('reports the same peak at 30, 60 and 144 fps (the decaying envelope does not)', () => {
+    const at = (fps: number) => {
+      const f = fakeEngine({ out: 0, base: 0 });
+      const hub = new AnalysisHub();
+      hub.attach(f.engine);
+      hub.setEventMap(kickMap);
+      f.state.playing = true;
+      let now = 1000;
+      let seen = 0;
+      for (let t = 3.9; t < 4.2; t += 1 / fps) {
+        f.state.time = t;
+        f.analyser.seek(t);
+        now += 1000 / fps;
+        hub.tick(now);
+        if (hub.frame.counts[EventType.KICK] !== seen) {
+          seen = hub.frame.counts[EventType.KICK];
+          return { peak: hub.frame.lastPeak[EventType.KICK], envelope: hub.frame.kick };
+        }
+      }
+      throw new Error('no kick');
+    };
+    const [a, b, c] = [at(30), at(60), at(144)];
+    expect(a.peak).toBeGreaterThan(0.5);
+    expect(b.peak).toBe(a.peak);
+    expect(c.peak).toBe(a.peak);
+    expect(c.envelope - a.envelope).toBeGreaterThan(0.05); // why the envelope is not used for spawning
+  });
+});
