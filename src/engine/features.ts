@@ -22,6 +22,7 @@ export function createSceneAudio(): SceneAudio {
     rms: 0,
     flux: 0,
     kick: 0,
+    kickPeak: 0,
     snare: 0,
     hat: 0,
     tone: 0,
@@ -101,6 +102,7 @@ export class AudioFeatureProvider {
     o.snare = shapeTransient(frame.snare, ts) * p.num('snareImpact') * g;
     o.hat = shapeTransient(frame.hat, ts) * g;
     o.tone = shapeTransient(frame.tone, ts) * g;
+    o.kickPeak = shapeTransient(frame.lastPeak[EventType.KICK], ts) * p.num('kickImpact') * g;
     o.kickCount = frame.counts[EventType.KICK];
     o.snareCount = frame.counts[EventType.SNARE];
     o.hatCount = frame.counts[EventType.HAT];

@@ -16,6 +16,11 @@
  * slow GPU makes the export take longer but never drops frames. A fixed pre-roll before
  * `start` warms up the analysis and the scene state deterministically.
  *
+ * With captions enabled, the encoder receives a separate 2D frame canvas: the finished scene
+ * (post effects included) is copied in first, then the HUD, title and player are drawn on top
+ * (overlay/painter.ts) with this export's own values — source time start + n / fps, the export
+ * analysis, the export scene instance, the chosen fps and the analyser in use.
+ *
  * Output goes through a sink (sinks.ts): in memory with the real size counted as it is
  * written, or into a file that is committed only after everything succeeded. Cancel is
  * honoured up to that commit — including during finalization — so "cancelled" always means
@@ -23,7 +28,10 @@
  */
 import { AnalysisHub } from '../audio/analysis/AnalysisHub';
 import type { EventMap } from '../audio/dsp/events';
+import { getScene } from '../engine/scenes/registry';
 import { VisualizerEngine, type VisualSnapshot } from '../engine/VisualizerEngine';
+import type { OverlayFrame } from '../overlay/model';
+import { createOverlayPainter, loadOverlayFonts, type OverlayContent } from '../overlay/painter';
 import type { QualityProfile } from '../engine/types';
 import { AAC_POLYFILL_PRIMING_FRAMES, aacPolyfillActive, loadMediabunny } from './capabilities';
 import { ExportCancelledError } from './errors';
@@ -53,6 +61,56 @@ export interface RenderJob {
   disk?: TransactionalFileSink;
   /** in-memory size limit (bytes); defaults to MAX_IN_MEMORY_BYTES */
   memoryLimitBytes?: number;
+  /** draw the HUD, track title and player into every frame (null / absent: the scene only) */
+  overlay?: OverlayContent | null;
+}
+
+/** Caption values of one export frame — only from this export's own objects. */
+function captionFrame(sceneId: string, engine: VisualizerEngine, hub: AnalysisHub, fps: number, fftSize: number, sampleRate: number, time: number): OverlayFrame {
+  const def = getScene(sceneId);
+  const f = hub.frame;
+  const tel = engine.telemetry;
+  return {
+    sceneIndex: def.index,
+    sceneName: def.name,
+    rotation: tel?.rotation ?? 0,
+    tilt: tel?.tilt ?? 0,
+    fps,
+    levels: [f.bass, f.mid, f.high],
+    lights: [f.kick, f.snare, f.hat, f.tone],
+    fftSize,
+    sampleRate,
+    time,
+    playing: true,
+  };
+}
+
+/** Glyphs the captions need, so the right font subsets are loaded before the first frame. */
+function captionText(content: OverlayContent, sceneId: string): string {
+  return `${content.track.name} ${getScene(sceneId).name} FIG ROT TILT FPS BASS MID HIGH KICK SNARE HAT TONE 0123456789 —·°/≈[]:%`;
+}
+
+/** Copies the finished scene into a 2D frame and draws the captions over it. */
+interface Composer {
+  canvas: HTMLCanvasElement;
+  draw(frame: OverlayFrame): void;
+}
+
+async function createComposer(scene: HTMLCanvasElement, width: number, height: number, content: OverlayContent, sceneId: string): Promise<Composer> {
+  await loadOverlayFonts(captionText(content, sceneId));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) throw new Error('2D CANVAS UNAVAILABLE FOR THE CAPTIONS');
+  const painter = createOverlayPainter(width, height, content);
+  return {
+    canvas,
+    draw(frame) {
+      ctx.drawImage(scene, 0, 0, width, height);
+      painter.draw(ctx, frame);
+    },
+  };
 }
 
 /** 'saving' = committing the finished file to disk: the one step that cannot be cancelled. */
@@ -210,6 +268,10 @@ export class RenderController {
       engine = new VisualizerEngine(canvas, { quality: this.job.quality, preserveDrawingBuffer: true, sceneFade: 0 });
       engine.setSize(spec.width, spec.height, 1);
       const eng = engine;
+      // the frame the encoder receives: the scene alone, or scene + captions
+      const composer = this.job.overlay ? await createComposer(canvas, spec.width, spec.height, this.job.overlay, visual.sceneId) : null;
+      const frameCanvas = composer ? composer.canvas : canvas;
+      checkCancel();
 
       // ---- output -------------------------------------------------------------------------
       const info = containerInfo(spec.container);
@@ -224,7 +286,7 @@ export class RenderController {
             ? new mb.MovOutputFormat({ fastStart: 'reserve' })
             : new mb.Mp4OutputFormat({ fastStart: 'reserve' });
       output = new mb.Output({ format, target });
-      const videoSource = new mb.CanvasSource(canvas, {
+      const videoSource = new mb.CanvasSource(frameCanvas, {
         codec: spec.videoCodec,
         quality: new mb.Quality({ bitrate: spec.videoBitrate }),
         keyFrameInterval: 2,
@@ -243,6 +305,8 @@ export class RenderController {
       // ---- analysis: the live algorithm on decoded PCM -----------------------------------
       let ring: PcmRing | null = null;
       let setTime: (t: number) => void = () => {};
+      /** sample rate of the analyser in use (the decoded audio) */
+      let analyserRate = 0;
       const hub = new AnalysisHub();
       hub.setExportMode(true);
       hub.setTuning({
@@ -271,9 +335,10 @@ export class RenderController {
         const draw = k >= -fps;
         eng.render({ frame: hub.frame, time: t, dt: 1 / fps, visual, reducedMotion: this.job.reducedMotion, exporting: true, skipRender: !draw });
         if (k >= 0) {
+          composer?.draw(captionFrame(visual.sceneId, eng, hub, fps, this.job.fftSize, analyserRate, t));
           await videoSource.add(frameTimestamp(k, fps), 1 / fps);
           if (k % 15 === 0) {
-            this.onPreview(canvas);
+            this.onPreview(frameCanvas);
             report('rendering', k + 1);
           }
         }
@@ -291,6 +356,7 @@ export class RenderController {
         const sr = chunk.sampleRate;
         if (!ring) {
           ring = new PcmRing(Math.ceil(sr * 8));
+          analyserRate = sr;
           const ve = virtualEngine(new PcmAnalyser(ring, sr, this.job.fftSize));
           setTime = ve.setTime;
           hub.attach(ve.engine);
@@ -405,57 +471,74 @@ export function maxAudioPackets(seconds: number): number {
 }
 
 /**
- * Render one deterministic still at `time` (with the same pre-roll as an export) into
- * `target` — a true preview of the exported frame, independent of the live stage.
+ * Render the export frame that shows source time `time` into `target` — the same frame the
+ * export of a range starting at `spec.start` encodes: identical pre-roll, per-frame analysis
+ * times and draw window, and (when `job.overlay` is set) the same captions on top.
  */
 export async function renderStill(
-  job: Omit<RenderJob, 'disk' | 'memoryLimitBytes' | 'spec'> & { spec: Pick<ExportSpec, 'width' | 'height' | 'fps'> },
+  job: Omit<RenderJob, 'disk' | 'memoryLimitBytes' | 'spec'> & { spec: Pick<ExportSpec, 'width' | 'height' | 'fps' | 'start'> },
   time: number,
   target: HTMLCanvasElement,
 ): Promise<void> {
   const mb = await loadMediabunny();
-  const { spec } = job;
+  const { spec, visual } = job;
+  const fps = spec.fps;
   const canvas = document.createElement('canvas');
+  canvas.width = spec.width;
+  canvas.height = spec.height;
   const engine = new VisualizerEngine(canvas, { quality: job.quality, preserveDrawingBuffer: true, sceneFade: 0 });
   engine.setSize(spec.width, spec.height, 1);
   const hub = new AnalysisHub();
   hub.setExportMode(true);
-  hub.setTuning({ bassSensitivity: 1, midSensitivity: 1, highSensitivity: 1, smoothing: Number(job.visual.params.smoothing ?? 0.45), beatImpact: 1, reducedMotion: job.reducedMotion, decay: Number(job.visual.params.decay ?? 1) });
-  const fps = spec.fps;
-  const from = preRollStart(time, 2);
-  const frames = Math.max(1, Math.round((time - from) * fps));
+  hub.setTuning({
+    bassSensitivity: 1,
+    midSensitivity: 1,
+    highSensitivity: 1,
+    smoothing: typeof visual.params.smoothing === 'number' ? visual.params.smoothing : 0.45,
+    beatImpact: 1,
+    reducedMotion: job.reducedMotion,
+    decay: typeof visual.params.decay === 'number' ? visual.params.decay : 1,
+  });
+  const preStart = preRollStart(spec.start);
+  const preFrames = Math.round((spec.start - preStart) * fps);
+  const n = Math.max(0, Math.round((time - spec.start) * fps));
   const abort = new AbortController();
   let ring: PcmRing | null = null;
+  let analyserRate = 0;
   let setTime: (t: number) => void = () => {};
   try {
-    for await (const chunk of decodeAudio(mb, job.file, from, time + 0.1, abort.signal)) {
+    const composer = job.overlay ? await createComposer(canvas, spec.width, spec.height, job.overlay, visual.sceneId) : null;
+    for await (const chunk of decodeAudio(mb, job.file, preStart, frameTime(spec.start, n, fps) + 0.1, abort.signal)) {
       const sr = chunk.sampleRate;
       if (!ring) {
-        ring = new PcmRing(Math.ceil(sr * 6));
-        const analyser = new PcmAnalyser(ring, sr, job.fftSize);
-        const ve = virtualEngine(analyser);
+        ring = new PcmRing(Math.ceil(sr * Math.max(8, (spec.start - preStart) + n / fps + 2)));
+        analyserRate = sr;
+        const ve = virtualEngine(new PcmAnalyser(ring, sr, job.fftSize));
         setTime = ve.setTime;
         hub.attach(ve.engine);
         hub.setEventMap(job.eventMap);
       }
-      const n = chunk.channels[0].length;
-      const mono = new Float32Array(n);
-      for (const ch of chunk.channels) for (let i = 0; i < n; i++) mono[i] += ch[i] / chunk.channels.length;
+      const len = chunk.channels[0].length;
+      const mono = new Float32Array(len);
+      for (const ch of chunk.channels) for (let i = 0; i < len; i++) mono[i] += ch[i] / chunk.channels.length;
       ring.write(chunk.firstFrame, mono);
     }
     let now = 1000;
-    for (let k = 0; k <= frames; k++) {
-      const t = from + k / fps;
+    let t = spec.start;
+    for (let k = -preFrames; k <= n; k++) {
+      t = frameTime(spec.start, k, fps);
       setTime(analysisTime(t, fps));
       now += 1000 / fps;
       hub.tick(now);
-      engine.render({ frame: hub.frame, time: t, dt: 1 / fps, visual: job.visual, reducedMotion: job.reducedMotion, exporting: true, skipRender: k < frames - fps });
+      // like the export: frames are drawn from the last second of pre-roll on (warm trails)
+      engine.render({ frame: hub.frame, time: t, dt: 1 / fps, visual, reducedMotion: job.reducedMotion, exporting: true, skipRender: k < Math.max(-fps, n - fps) });
     }
+    composer?.draw(captionFrame(visual.sceneId, engine, hub, fps, job.fftSize, analyserRate, t));
     const g = target.getContext('2d');
     if (g) {
       g.fillStyle = '#000';
       g.fillRect(0, 0, target.width, target.height);
-      g.drawImage(canvas, 0, 0, target.width, target.height);
+      g.drawImage(composer ? composer.canvas : canvas, 0, 0, target.width, target.height);
     }
   } finally {
     engine.dispose();

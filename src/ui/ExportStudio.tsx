@@ -29,7 +29,7 @@ import {
   type VideoCodecId,
 } from '../export/plan';
 import type { RenderPhase } from '../export/RenderController';
-import { cancelExport, discardResult, exportReducedMotion, onExportPreview, snapshotForExport, startExport, useStudio } from '../export/studio';
+import { cancelExport, discardResult, exportReducedMotion, onExportPreview, overlayForExport, snapshotForExport, startExport, useStudio } from '../export/studio';
 import { usePlayer } from '../state/player';
 import { useSettings } from '../state/settings';
 import { useUi } from '../state/ui';
@@ -108,6 +108,8 @@ export function ExportStudio() {
   const [rangeMode, setRangeMode] = useState<'full' | 'segment'>('full');
   const [range, setRange] = useState({ start: 0, end: 0 });
   const [toDisk, setToDisk] = useState(false);
+  // HUD, track title and player drawn into every frame (as shown with HIDE UI)
+  const [captions, setCaptions] = useState<'on' | 'off'>('on');
   const [codecSupport, setCodecSupport] = useState<Record<string, Support | undefined>>({});
   const [fpsSupport, setFpsSupport] = useState<Record<number, Support | undefined>>({});
   const [resSupport, setResSupport] = useState<Record<number, Support | undefined>>({});
@@ -204,12 +206,14 @@ export function ExportStudio() {
     setStillBusy(true);
     try {
       const { renderStill } = await import('../export/RenderController');
+      const visual = snapshotForExport();
       await renderStill(
         {
-          spec: { width: res.width, height: res.height, fps },
+          spec: { width: res.width, height: res.height, fps, start: span.start },
           file,
           eventMap: analysis?.events ?? null,
-          visual: snapshotForExport(),
+          visual,
+          overlay: captions === 'on' ? overlayForExport(visual) : null,
           quality: qualityProfile(detail),
           fftSize: useSettings.getState().fftSize,
           reducedMotion: exportReducedMotion(),
@@ -352,6 +356,15 @@ export function ExportStudio() {
                 </span>
               </div>
               <Seg
+                label="CAPTIONS"
+                value={captions}
+                options={[
+                  { value: 'on', label: 'HUD · TITLE · PLAYER', disabled: busy },
+                  { value: 'off', label: 'NONE', disabled: busy },
+                ]}
+                onChange={setCaptions}
+              />
+              <Seg
                 label="VIDEO RANGE"
                 value={rangeMode}
                 options={[
@@ -430,7 +443,7 @@ export function ExportStudio() {
                 BITRATE-BASED ENCODING (WEBCODECS OFFERS NO CRF). THE TRACK NEVER LEAVES THIS DEVICE.
               </p>
               {track && (
-                <button type="button" className="btn btn-primary btn-block" disabled={!ready} onClick={() => void startExport(spec(), detail, toDisk)}>
+                <button type="button" className="btn btn-primary btn-block" disabled={!ready} onClick={() => void startExport(spec(), detail, toDisk, captions === 'on')}>
                   {busy ? 'RENDERING…' : `EXPORT ${CONTAINERS.find((c) => c.id === container)!.label} · ${res.width}×${res.height} · ${fps} FPS`}
                 </button>
               )}

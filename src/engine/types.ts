@@ -65,6 +65,12 @@ export interface SceneAudio {
   snare: number;
   hat: number;
   tone: number;
+  /**
+   * Strength of the most recent kick as it fired (KICK IMPACT, transient sensitivity and the
+   * noise gate applied; 0 when any of them mutes it). Read it when `kickCount` changes: unlike
+   * `kick` it has not decayed yet, so it is the same at every frame rate.
+   */
+  kickPeak: number;
   /** monotonic event counters, for one-shot reactions */
   kickCount: number;
   snareCount: number;

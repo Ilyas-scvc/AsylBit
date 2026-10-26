@@ -172,3 +172,89 @@ describe('no scene rebuilds its geometry while nothing changes', () => {
     });
   }
 });
+
+describe('REACTIVE MESH kicks', () => {
+  type Mesh = SceneInstance & { waves: { count: number; levels(): number[] }; phase: number; spin: number; head: number; lines: THREE.LineSegments; lineMat: THREE.ShaderMaterial };
+  /** Play `seconds` at `fps`; kicks (s) bump kickCount with the given peak. */
+  function play(layout: string, kicks: number[], opts: { seconds?: number; fps?: number; peak?: number; speed?: number } = {}) {
+    const fps = opts.fps ?? 60;
+    const instance = SCENE_FACTORIES['reactive-mesh']({ quality: qualityProfile('balanced'), renderer }) as Mesh;
+    const { ctx } = makeContext('reactive-mesh', { layout, speed: opts.speed ?? 1 }, 'balanced');
+    ctx.dt = 1 / fps;
+    const pending = [...kicks];
+    const frames = Math.round((opts.seconds ?? 2) * fps);
+    for (let n = 1; n <= frames; n++) {
+      const t = n / fps;
+      while (pending.length && pending[0] <= t + 1e-9) {
+        pending.shift();
+        ctx.audio.kickCount++;
+        ctx.audio.kickPeak = opts.peak ?? 1;
+      }
+      ctx.time = t;
+      ctx.clock = t;
+      instance.update(ctx);
+    }
+    return instance;
+  }
+
+  for (const layout of ['flat', 'spiral', 'bowl']) {
+    it(`${layout.toUpperCase()}: a new kick adds a ring and the previous one keeps going`, () => {
+      const m = play(layout, [0.5, 1.0], { seconds: 1.05 });
+      expect(m.waves.count).toBe(2);
+      const u = m.lineMat.uniforms;
+      expect(u.uWaveCount.value).toBe(2);
+      const data = u.uWaves.value as Float32Array;
+      expect(data[0]).toBeGreaterThan(data[2]); // the older ring is further out
+      expect(data[1]).toBeGreaterThan(0.1); // and still clearly visible
+      m.dispose();
+    });
+  }
+
+  it('kicks never reset the phase, rotation, spectrum history or geometry', () => {
+    const quiet = play('flat', [], { seconds: 3 });
+    const kicked = play('flat', [0.5, 1, 1.5, 2, 2.5], { seconds: 3 });
+    expect(kicked.phase).toBe(quiet.phase);
+    expect(kicked.spin).toBe(quiet.spin);
+    expect(kicked.head).toBe(quiet.head);
+    expect(kicked.lines.geometry.attributes.position.count).toBe(quiet.lines.geometry.attributes.position.count);
+    quiet.dispose();
+    kicked.dispose();
+  });
+
+  it('KICK IMPACT 0 (a 0 peak) adds no ring at all', () => {
+    const m = play('flat', [0.5, 1.0, 1.5], { peak: 0 });
+    expect(m.waves.count).toBe(0);
+    expect(m.lineMat.uniforms.uWaveCount.value).toBe(0);
+    m.dispose();
+  });
+
+  it('a held bass without kicks (like 12–14 s of the test pattern) spawns nothing', () => {
+    const m = play('flat', [], { seconds: 2 });
+    expect(m.waves.count).toBe(0);
+    m.dispose();
+  });
+
+  it('minimum SPEED with kicks every 0.5 s stays well inside the pool', () => {
+    const m = play('spiral', Array.from({ length: 16 }, (_, i) => 0.5 + i * 0.5), { seconds: 9, speed: 0 });
+    expect(m.waves.count).toBeLessThanOrEqual(8);
+    m.dispose();
+  });
+
+  it('the same kicks give the same rings at 30, 60 and 144 fps', () => {
+    const at = (fps: number) => {
+      const m = play('bowl', [0.5, 1.0, 1.5], { seconds: 2, fps });
+      const out = Array.from(m.lineMat.uniforms.uWaves.value as Float32Array).slice(0, m.waves.count * 2);
+      m.dispose();
+      return out;
+    };
+    const a = at(30);
+    const b = at(60);
+    const c = at(144);
+    expect(a.length).toBe(b.length);
+    expect(a.length).toBe(c.length);
+    a.forEach((v, i) => {
+      expect(b[i]).toBeCloseTo(v, 5);
+      expect(c[i]).toBeCloseTo(v, 5);
+    });
+  });
+});

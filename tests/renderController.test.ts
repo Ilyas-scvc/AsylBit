@@ -11,7 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { synthesizeTestPattern } from '../src/audio/dsp/testPattern';
 import { qualityProfile } from '../src/engine/quality';
 import type { ExportSpec } from '../src/export/plan';
+import { frameTime, preRollStart } from '../src/export/plan';
 import { OutputLimitError, TransactionalFileSink, type WriteChunk } from '../src/export/sinks';
+import { getScene } from '../src/engine/scenes/registry';
+import { readoutLabel, timeLabels, type OverlayFrame } from '../src/overlay/model';
+import { layoutOverlay, type FontSpec, type OverlayContent } from '../src/overlay/painter';
+import { recordingContext, type DrawCall } from './helpers';
 
 const SR = 48000;
 const pattern = synthesizeTestPattern(SR, 120);
@@ -33,6 +38,10 @@ interface Log {
   onVideoFrame: (n: number) => void;
   noTrack: boolean;
   closedStreams: number;
+  /** the canvas the video encoder was given */
+  sourceCanvas: unknown;
+  /** simulated encoder time per frame */
+  slowEncodeMs: number;
 }
 const log: Log = {} as Log;
 
@@ -53,6 +62,8 @@ function resetLog() {
     onVideoFrame: () => {},
     noTrack: false,
     closedStreams: 0,
+    sourceCanvas: null,
+    slowEncodeMs: 0,
   });
 }
 
@@ -110,7 +121,11 @@ const fakeMediabunny = {
   Output: FakeOutput,
   CanvasSource: class {
     output!: FakeOutput;
+    constructor(canvas: unknown) {
+      log.sourceCanvas = canvas;
+    }
     async add(timestamp: number) {
+      if (log.slowEncodeMs) await new Promise((r) => setTimeout(r, log.slowEncodeMs));
       const n = log.videoTimestamps.length;
       if (n === log.failVideoAt) throw new Error('ENCODER ERROR: hardware encoder lost');
       log.videoTimestamps.push(timestamp);
@@ -185,7 +200,13 @@ vi.mock('../src/engine/VisualizerEngine', () => ({
       log.engines++;
     }
     setSize() {}
+    /** simulation steps of this instance (drawn or not): the scene state ROT / TILT come from */
+    steps = 0;
+    get telemetry() {
+      return { rotation: (this.steps * 2.5) % 360, tilt: -4.5 };
+    }
     render(input: { skipRender?: boolean }) {
+      this.steps++;
       if (!input.skipRender) log.renders++;
     }
     dispose() {
@@ -194,7 +215,7 @@ vi.mock('../src/engine/VisualizerEngine', () => ({
   },
 }));
 
-const { ExportCancelledError, RenderController } = await import('../src/export/RenderController');
+const { ExportCancelledError, RenderController, renderStill } = await import('../src/export/RenderController');
 
 /** FileSystemWritableFileStream semantics: writes go to a swap file, close() replaces the file, abort() discards. */
 class FakeDiskFile {
@@ -470,5 +491,151 @@ describe('RenderController — in-memory size limit', () => {
       if (p.phase === 'finalizing') c.cancel();
     });
     await expect(c.run()).rejects.toBeInstanceOf(ExportCancelledError);
+  });
+});
+
+describe('RenderController — captions drawn into every frame', () => {
+  /** Canvases of the 2D frame, the text measurer and the waveform layers record what is drawn. */
+  class FakeCanvas {
+    width = 0;
+    height = 0;
+    readonly calls: DrawCall[] = [];
+    options: unknown;
+    used = false;
+    private ctx: CanvasRenderingContext2D | null = null;
+    getContext(_type: string, options?: unknown) {
+      this.used = true;
+      this.options = options;
+      this.ctx ??= recordingContext(this.calls);
+      return this.ctx;
+    }
+  }
+  let canvases: FakeCanvas[] = [];
+  let fonts: { load: () => Promise<unknown>; ready: Promise<unknown> } | undefined;
+  beforeEach(() => {
+    canvases = [];
+    fonts = undefined;
+    vi.stubGlobal('document', {
+      createElement: () => {
+        const c = new FakeCanvas();
+        canvases.push(c);
+        return c;
+      },
+      get fonts() {
+        return fonts;
+      },
+    });
+  });
+
+  const DURATION = 120; // the test pattern
+  const overlay = (): OverlayContent => ({
+    track: { name: 'test_pattern.wav', extension: 'wav', size: 23_040_044, duration: DURATION, mapped: null },
+    waveform: null,
+    accent: '#d4ff3a',
+  });
+  const captioned = (over: Partial<ExportSpec> = {}) => ({ ...job(over), overlay: overlay() });
+  /** the scene canvas (WebGL: the fake engine never asks it for a 2D context) */
+  const sceneCanvas = (list: FakeCanvas[]) => list.find((c) => !c.used)!;
+  /** the encoder's 2D frame */
+  const frameCanvas = (list: FakeCanvas[]) => list.find((c) => (c.options as { alpha?: boolean } | undefined)?.alpha === false);
+  /** the frame canvas' calls, one list per frame (each frame starts by copying the scene in) */
+  function perFrame(list: FakeCanvas[]): DrawCall[][] {
+    const scene = sceneCanvas(list);
+    const frames: DrawCall[][] = [];
+    for (const call of frameCanvas(list)?.calls ?? []) {
+      if (call.op === 'drawImage' && call.args[0] === scene) frames.push([]);
+      frames.at(-1)?.push(call);
+    }
+    return frames;
+  }
+  /** calls as plain data: canvases become a tag, numbers are rounded, colour only where it fills */
+  const plain = (calls: DrawCall[]) =>
+    calls.map((c) => [c.op, c.op.startsWith('fill') ? String(c.fillStyle) : '', ...c.args.map((a) => (a instanceof FakeCanvas ? 'canvas' : typeof a === 'number' ? Math.round(a * 1e6) / 1e6 : a))]);
+  const texts = (calls: DrawCall[]) => calls.filter((c) => c.op === 'fillText').map((c) => String(c.args[0]));
+  /** the recording context's measureText, as a layout Measure */
+  const measure = (text: string, f: FontSpec) => [...text].length * Number(f.size.toFixed(2)) * 0.6;
+
+  it('encodes scene + captions, with the source time, chosen fps, analyser and absolute playhead of each frame', async () => {
+    const spec = job().spec;
+    await new RenderController(captioned()).run();
+    const scene = sceneCanvas(canvases);
+    expect(log.sourceCanvas).toBe(frameCanvas(canvases));
+    expect(log.sourceCanvas).not.toBe(scene);
+
+    const frames = perFrame(canvases);
+    expect(frames).toHaveLength(90);
+    const def = getScene('pulse-object');
+    const sample: OverlayFrame = { sceneIndex: def.index, sceneName: def.name, rotation: 0, tilt: 0, fps: 30, levels: [0, 0, 0], lights: [0, 0, 0, 0], fftSize: 2048, sampleRate: SR, time: 0, playing: true };
+    const l = layoutOverlay(spec.width, spec.height, overlay(), sample, measure);
+    const wave = l.player.wave;
+    const preFrames = Math.round((spec.start - preRollStart(spec.start)) * 30);
+    frames.forEach((calls, k) => {
+      // the finished scene first, then the text on top
+      expect(calls[0].op).toBe('drawImage');
+      expect(calls[0].args[0]).toBe(scene);
+      const t = frameTime(spec.start, k, 30);
+      const tx = texts(calls);
+      expect(tx).toContain(timeLabels(t, DURATION).now);
+      expect(tx).toContain(' / 02:00.0');
+      expect(tx).toContain('FFT 2048 · 48.0 KHZ · 23.4 HZ/BIN');
+      // ROT / TILT from the export's own scene instance after this frame's step; FPS = chosen rate
+      expect(tx).toContain(readoutLabel(((preFrames + k + 1) * 2.5) % 360, -4.5, 30));
+      // the playhead sits on the whole track (a fragment starting at 2.95 s is not at 0)
+      const head = calls.find((c) => c.op === 'fillRect' && c.args[3] === wave.h + 8 * l.s);
+      expect(head?.args[0]).toBe(Math.round(wave.x + wave.w * (t / DURATION)));
+    });
+    expect(texts(frames[0])).toContain('00:02.9');
+    expect(texts(frames[89])).toContain('00:05.9');
+  });
+
+  it('gives identical captions however fast the encoder runs', async () => {
+    await new RenderController(captioned({ end: 4.95 })).run();
+    const fast = plain(perFrame(canvases).flat());
+    canvases = [];
+    resetLog();
+    log.slowEncodeMs = 3;
+    await new RenderController(captioned({ end: 4.95 })).run();
+    const slow = plain(perFrame(canvases).flat());
+    expect(slow.length).toBeGreaterThan(0);
+    expect(slow).toEqual(fast);
+  });
+
+  it('RENDER PREVIEW FRAME composes exactly the exported frame (fragment with a non-zero start)', async () => {
+    await new RenderController(captioned()).run();
+    const exported = perFrame(canvases);
+    for (const n of [0, 45, 89]) {
+      canvases = [];
+      const target = new FakeCanvas();
+      target.width = 320;
+      target.height = 180;
+      await renderStill(captioned(), frameTime(2.95, n, 30), target as unknown as HTMLCanvasElement);
+      const still = perFrame(canvases);
+      expect(still, `frame ${n}`).toHaveLength(1);
+      expect(plain(still[0]), `frame ${n}`).toEqual(plain(exported[n]));
+      // and the preview shows that composed frame
+      const shown = target.calls.find((c) => c.op === 'drawImage');
+      expect(shown?.args[0]).toBe(frameCanvas(canvases));
+    }
+  });
+
+  it('loads the caption fonts before the first frame', async () => {
+    const order: string[] = [];
+    fonts = {
+      load: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        order.push('font');
+      },
+      ready: Promise.resolve(),
+    };
+    log.onVideoFrame = () => order.push('frame');
+    await new RenderController(captioned({ end: 3.95 })).run();
+    expect(order.slice(0, 3)).toEqual(['font', 'font', 'font']);
+    expect(order.lastIndexOf('font')).toBeLessThan(order.indexOf('frame'));
+  });
+
+  it('without captions the encoder gets the scene canvas itself', async () => {
+    await new RenderController(job()).run();
+    expect(log.sourceCanvas).toBe(sceneCanvas(canvases));
+    expect(frameCanvas(canvases)).toBeUndefined();
   });
 });

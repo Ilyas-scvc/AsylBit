@@ -44,6 +44,11 @@ export interface AudioFrame {
   counts: Uint32Array;
   /** strength of the most recent event of each type */
   lastStrength: Float32Array;
+  /**
+   * Impulse value each type was set to when its most recent event fired (beat impact applied,
+   * before any decay) — the same for every frame rate, unlike the decaying envelopes above.
+   */
+  lastPeak: Float32Array;
   /** playback time of the most recent event of each type (-1 if none) */
   lastTime: Float32Array;
   /** smoothed log-spectrum, DISPLAY_BANDS values 0..1 (low → high) */
@@ -79,6 +84,7 @@ export function createAudioFrame(): AudioFrame {
     tone: 0,
     counts: new Uint32Array(4),
     lastStrength: new Float32Array(4),
+    lastPeak: new Float32Array(4),
     lastTime: new Float32Array([-1, -1, -1, -1]),
     spectrum: new Float32Array(DISPLAY_BANDS),
     peaks: new Float32Array(DISPLAY_BANDS),

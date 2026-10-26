@@ -662,12 +662,64 @@ select {
 }
 
 /* immersive mode (HIDE UI) ------------------------------------------------- */
+/* Hidden: header, panels, scene / frame switches, safe zones, file upload and the player's
+   volume / repeat / replace / fullscreen. Kept and live: the HUD captions, the track title
+   and a compact player (play, title, waveform with seek, time) — the same blocks an export
+   draws into its frames. */
 .ui-hidden .chrome,
 .ui-hidden .chrome-wrap,
-.ui-hidden .hud,
-.ui-hidden .hero-title,
-.ui-hidden .safe-zones {
+.ui-hidden .safe-zones,
+.ui-hidden .hud-state,
+.ui-hidden .hud-av,
+.ui-hidden .hero-title:not(.is-track) {
   display: none !important;
+}
+.ui-hidden .player-dock.has-track {
+  display: block !important;
+}
+.ui-hidden .player-controls,
+.ui-hidden .player-notice {
+  display: none !important;
+}
+@media (min-width: 761px) {
+  /* the hidden controls column collapses (phones keep their own grid areas) */
+  .ui-hidden .player {
+    grid-template-columns: 48px minmax(150px, 230px) minmax(0, 1fr) auto;
+  }
+}
+/* the meters keep their frequency ranges at every width (narrow pages drop them otherwise) */
+.ui-hidden .meter {
+  grid-template-columns: 38px 92px 34px auto;
+}
+.ui-hidden .meter-range {
+  display: inline;
+}
+@media (max-width: 760px) {
+  /* phone pages: with the controls gone there is room for every readout — the right block
+     stacks under the left one, as in vertical (9:16) exports */
+  .ui-hidden .hud {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 10px;
+  }
+  .ui-hidden .hud > div {
+    position: static;
+  }
+  .ui-hidden .hud-tr {
+    display: flex !important;
+    text-align: left;
+    align-items: flex-start;
+  }
+  .ui-hidden .hud-tl .hud-dim {
+    display: block;
+  }
+  .ui-hidden .hud-meters {
+    margin-top: 14px;
+  }
+  .ui-hidden .meter {
+    display: grid;
+  }
 }
 .ui-hidden .hero {
   height: 100vh;
