@@ -4,27 +4,13 @@
  */
 import { useEffect, useRef } from 'react';
 import { analysisHub } from '../audio/analysis/AnalysisHub';
-import { binWidth } from '../audio/dsp/bands';
 import { usePlayer } from '../state/player';
 import { useSettings } from '../state/settings';
 import { getScene } from '../engine/scenes/registry';
+import { eventsLabel, fftLabel, figLabel, HUD_LIGHTS as LIGHTS, HUD_METERS as METERS, lightOn, meterFill, meterText, readoutLabel, type EventsState } from '../overlay/model';
 import { useVisual } from '../state/visual';
 import { useRuntime } from '../visual/runtime';
 import { telemetry } from '../visual/telemetry';
-import { formatKhz } from './format';
-
-const LIGHTS = [
-  { key: 'kick', label: 'KICK' },
-  { key: 'snare', label: 'SNARE' },
-  { key: 'hat', label: 'HAT' },
-  { key: 'tone', label: 'TONE' },
-] as const;
-
-const METERS = [
-  { key: 'bass', label: 'BASS', range: '20–150 HZ' },
-  { key: 'mid', label: 'MID', range: '150–2K' },
-  { key: 'high', label: 'HIGH', range: '2K–12K' },
-] as const;
 
 export function useStateLabel(): { text: string; tone: 'idle' | 'live' | 'busy' | 'error' } {
   const status = usePlayer((s) => s.status);
@@ -59,7 +45,7 @@ export function Hud() {
 
   const readout = useRef<HTMLSpanElement>(null);
   const avRef = useRef<HTMLSpanElement>(null);
-  const meterFill = useRef<(HTMLSpanElement | null)[]>([]);
+  const meterFillEls = useRef<(HTMLSpanElement | null)[]>([]);
   const meterVal = useRef<(HTMLSpanElement | null)[]>([]);
   const lights = useRef<(HTMLSpanElement | null)[]>([]);
 
@@ -73,23 +59,20 @@ export function Hud() {
       const f = analysisHub.frame;
       const levels = [f.bass, f.mid, f.high];
       for (let i = 0; i < 3; i++) {
-        const el = meterFill.current[i];
-        if (el) el.style.transform = `scaleX(${Math.min(1, levels[i]).toFixed(3)})`;
+        const el = meterFillEls.current[i];
+        if (el) el.style.transform = `scaleX(${meterFill(levels[i]).toFixed(3)})`;
       }
       const env = [f.kick, f.snare, f.hat, f.tone];
       for (let i = 0; i < 4; i++) {
         const el = lights.current[i];
-        if (el) el.style.setProperty('--on', Math.min(1, env[i] * 1.6).toFixed(3));
+        if (el) el.style.setProperty('--on', lightOn(env[i]).toFixed(3));
       }
       if (n++ % 6 === 0) {
         for (let i = 0; i < 3; i++) {
           const el = meterVal.current[i];
-          if (el) el.textContent = Math.min(9.99, levels[i]).toFixed(2);
+          if (el) el.textContent = meterText(levels[i]);
         }
-        if (readout.current) {
-          const fps = useRuntime.getState().fps;
-          readout.current.textContent = `[ROT ${telemetry.rotation.toFixed(1).padStart(5, '0')}°] [TILT ${telemetry.tilt.toFixed(1)}°] [FPS ${fps || '—'}]`;
-        }
+        if (readout.current) readout.current.textContent = readoutLabel(telemetry.rotation, telemetry.tilt, useRuntime.getState().fps);
         if (avRef.current) avRef.current.textContent = `AV SYNC +${Math.round(analysisHub.latency * 1000)} MS`;
       }
     };
@@ -98,25 +81,17 @@ export function Hud() {
   }, [visible]);
 
   const rate = sampleRate || 0;
-  const binHz = rate ? binWidth(rate, fftSize).toFixed(1) : '—';
-  let eventsLabel = 'EVENTS: —';
+  let events: EventsState = { kind: 'none' };
   if (status === 'ready') {
-    if (analysisStatus === 'ready' && analysis) {
-      const total = analysis.events.times.length;
-      eventsLabel = `EVENTS: MAPPED · ${total}${analysis.bpm ? ` · ≈${analysis.bpm} BPM` : ''}`;
-    } else if (analysisStatus === 'unavailable') {
-      eventsLabel = `EVENTS: REAL-TIME · ${analysisMessage ?? ''}`;
-    } else {
-      eventsLabel = 'EVENTS: REAL-TIME (MAP PENDING)';
-    }
+    if (analysisStatus === 'ready' && analysis) events = { kind: 'mapped', events: analysis.events.times.length, bpm: analysis.bpm };
+    else if (analysisStatus === 'unavailable') events = { kind: 'realtime', note: analysisMessage };
+    else events = { kind: 'pending' };
   }
 
   return (
     <div className="hud" aria-hidden="false">
       <div className="hud-tl">
-        <span className="hud-strong">
-          FIG. {m.index} — {m.name}
-        </span>
+        <span className="hud-strong">{figLabel(m.index, m.name)}</span>
         <span className="hud-dim" ref={readout}>
           [ROT 000.0°] [TILT 0.0°] [FPS —]
         </span>
@@ -127,7 +102,7 @@ export function Hud() {
             <div className="meter" key={mt.key}>
               <span className="meter-label">{mt.label}</span>
               <span className="meter-track">
-                <span className="meter-fill" ref={(el) => void (meterFill.current[i] = el)} />
+                <span className="meter-fill" ref={(el) => void (meterFillEls.current[i] = el)} />
               </span>
               <span className="meter-val" ref={(el) => void (meterVal.current[i] = el)}>
                 0.00
@@ -146,11 +121,9 @@ export function Hud() {
         </div>
       </div>
       <div className="hud-tr">
-        <span>
-          FFT {fftSize} · {formatKhz(rate)} · {binHz} HZ/BIN
-        </span>
-        <span className="hud-dim">{eventsLabel}</span>
-        <span className="hud-dim" ref={avRef} title="Visuals are delayed by the measured audio output latency">
+        <span>{fftLabel(fftSize, rate)}</span>
+        <span className="hud-dim">{eventsLabel(events)}</span>
+        <span className="hud-dim hud-av" ref={avRef} title="Visuals are delayed by the measured audio output latency">
           AV SYNC +0 MS
         </span>
       </div>

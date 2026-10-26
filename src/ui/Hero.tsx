@@ -1,11 +1,56 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { loadTestPattern } from '../audio/controller';
 import { getScene } from '../engine/scenes/registry';
 import { usePlayer } from '../state/player';
 import { PREVIEW_ASPECTS, useUi } from '../state/ui';
 import { stepScene, useVisual } from '../state/visual';
 import { VisualStage } from '../visual/VisualStage';
-import { formatTime, stripExtension } from './format';
+import { nowLabel, trackTitle } from '../overlay/model';
+import { canvasMeasure, FONTS, wrapTitle } from '../overlay/painter';
 import { Hud } from './Hud';
+
+/**
+ * The outlined track title, broken into at most two lines by the same wrapTitle the exported
+ * frames use (explicit lines: a CSS line clamp lets the tops of a third line show through the
+ * tight 0.8 line height).
+ */
+function OutlineTitle({ name }: { name: string }) {
+  const title = trackTitle(name);
+  const ref = useRef<HTMLHeadingElement>(null);
+  const [lines, setLines] = useState<string[]>([title.text]);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const box = el?.parentElement;
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!el || !box || !ctx) return;
+    const measure = canvasMeasure(ctx);
+    const update = () => {
+      const max = getComputedStyle(box).maxWidth;
+      // wide pages cap .hero-title with max-width; phone pages stretch it between insets
+      const width = max === 'none' ? box.clientWidth : Number.parseFloat(max);
+      const size = Number.parseFloat(getComputedStyle(el).fontSize);
+      setLines(wrapTitle(title.text.toUpperCase(), Math.max(1, width - 2), FONTS.title(size), measure));
+    };
+    update();
+    window.addEventListener('resize', update);
+    document.fonts?.addEventListener('loadingdone', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      document.fonts?.removeEventListener('loadingdone', update);
+    };
+  }, [title.text]);
+
+  return (
+    <h1 ref={ref} className="hero-word hero-word-outline" title={name} aria-label={title.text} style={{ ['--k' as string]: title.k }}>
+      {lines.map((l, i) => (
+        <span key={i} className="hero-line" aria-hidden="true">
+          {l}
+        </span>
+      ))}
+    </h1>
+  );
+}
 
 function HeroTitle({ onBrowse }: { onBrowse: () => void }) {
   const status = usePlayer((s) => s.status);
@@ -14,17 +59,10 @@ function HeroTitle({ onBrowse }: { onBrowse: () => void }) {
   const duration = usePlayer((s) => s.duration);
 
   if (track && status !== 'error') {
-    const name = stripExtension(track.name).replace(/[_]+/g, ' ');
-    const shown = name.length > 40 ? `${name.slice(0, 39)}…` : name;
-    const k = Math.min(1, 15 / Math.max(1, shown.length));
     return (
       <div className="hero-title is-track">
-        <span className="hero-kicker">
-          [NOW] {track.extension.toUpperCase()} · {formatTime(duration)} · LOCAL FILE
-        </span>
-        <h1 className="hero-word hero-word-outline" title={track.name} style={{ ['--k' as string]: Math.max(0.42, k) }}>
-          {shown}
-        </h1>
+        <span className="hero-kicker">{nowLabel(track.extension, duration)}</span>
+        <OutlineTitle name={track.name} />
       </div>
     );
   }

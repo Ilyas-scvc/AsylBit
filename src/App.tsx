@@ -5,6 +5,7 @@ import { SHARE_HASH_KEY, decodePresetFromUrl } from './engine/presets/schema';
 import { sceneRegistry } from './engine/scenes/registry';
 import { useStudio } from './export/studio';
 import { useNotice } from './state/notice';
+import { usePlayer } from './state/player';
 import { useUi } from './state/ui';
 import { selectScene, stepScene, useVisual } from './state/visual';
 import { ExportStatusBar } from './ui/ExportPanel';
@@ -60,6 +61,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const hidden = useUi((s) => s.hidden);
+  // with a track loaded, HIDE UI keeps a compact player (play, title, waveform, time)
+  const hasTrack = usePlayer((s) => s.track !== null);
   const inspectorOpen = useUi((s) => s.inspectorOpen);
   const accent = useVisual((s) => String(s.scenes[s.sceneId]?.params.primary ?? '#d4ff3a'));
   const background = useVisual((s) => String(s.scenes[s.sceneId]?.params.background ?? '#050505'));
@@ -239,7 +242,7 @@ export default function App() {
         <Hero onBrowse={browse} />
         <Sections />
       </main>
-      <div id="player" className="player-dock chrome">
+      <div id="player" className={`player-dock chrome ${hasTrack ? 'has-track' : ''}`}>
         <PlayerBar onBrowse={browse} onToggleFullscreen={toggleFullscreen} isFullscreen={isFullscreen} fullscreenSupported={fullscreenSupported} />
       </div>
       <div className="chrome-wrap">

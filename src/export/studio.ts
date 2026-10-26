@@ -14,6 +14,7 @@ import { useRuntime } from '../visual/runtime';
 import { ExportCancelledError } from './errors';
 import type { RenderController, RenderProgress } from './RenderController';
 import { TransactionalFileSink } from './sinks';
+import type { OverlayContent } from '../overlay/painter';
 import { containerInfo, estimateBytes, exportFileName, exportRange, MAX_IN_MEMORY_BYTES, type ExportSpec } from './plan';
 
 export interface StudioResult {
@@ -56,7 +57,30 @@ export function exportReducedMotion(): boolean {
   return resolveReducedMotion(useSettings.getState().reducedMotion, systemPrefersReducedMotion());
 }
 
-export async function startExport(spec: ExportSpec, detail: PerformancePreset, toDisk: boolean): Promise<void> {
+/**
+ * Captions drawn into exported frames (HUD, [NOW] line, title, player) for the loaded track:
+ * file facts, the event map and the whole-track waveform, coloured with the export look's
+ * accent. Frame values (time, levels, ROT / TILT …) come from the export itself.
+ */
+export function overlayForExport(visual: { params: Record<string, unknown> }): OverlayContent | null {
+  const p = usePlayer.getState();
+  if (!p.track) return null;
+  const a = p.analysis;
+  const primary = visual.params.primary;
+  return {
+    track: {
+      name: p.track.name,
+      extension: p.track.extension,
+      size: p.track.size,
+      duration: p.duration,
+      mapped: a ? { events: a.events.times.length, bpm: a.bpm, counts: a.counts } : null,
+    },
+    waveform: a,
+    accent: typeof primary === 'string' && /^#[0-9a-f]{6}$/i.test(primary) ? primary : '#d4ff3a',
+  };
+}
+
+export async function startExport(spec: ExportSpec, detail: PerformancePreset, toDisk: boolean, captions = true): Promise<void> {
   if (useStudio.getState().status === 'running') return;
   const file = getCurrentFile();
   if (!file) {
@@ -105,12 +129,14 @@ export async function startExport(spec: ExportSpec, detail: PerformancePreset, t
     } catch {
       throw new Error('THE VIDEO RENDERER FAILED TO LOAD — CHECK THE CONNECTION AND TRY AGAIN');
     }
+    const visual = snapshotForExport();
     controller = new RenderControllerClass(
       {
         spec: job,
         file,
         eventMap: usePlayer.getState().analysis?.events ?? null,
-        visual: snapshotForExport(),
+        visual,
+        overlay: captions ? overlayForExport(visual) : null,
         quality: qualityProfile(detail),
         fftSize: useSettings.getState().fftSize,
         reducedMotion: exportReducedMotion(),

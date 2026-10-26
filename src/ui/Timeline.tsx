@@ -4,13 +4,14 @@
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { engine, seek } from '../audio/controller';
-import { EventType } from '../audio/dsp/events';
 import type { OfflineAnalysisResult } from '../audio/dsp/offlineAnalysis';
 import { usePlayer } from '../state/player';
-import { useSettings } from '../state/settings';
+import { useVisual } from '../state/visual';
+import { drawWaveform, WAVE_BASE, WAVE_MARKERS } from '../overlay/waveform';
 import { formatTime } from './format';
 
-function drawWaveform(canvas: HTMLCanvasElement, data: OfflineAnalysisResult | null, color: string, markers: string, withBands: boolean) {
+/** Size the canvas to its box at the device pixel ratio, then draw the shared waveform into it. */
+function paintWaveform(canvas: HTMLCanvasElement, data: OfflineAnalysisResult | null, color: string, markers: string) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
   const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
@@ -19,60 +20,7 @@ function drawWaveform(canvas: HTMLCanvasElement, data: OfflineAnalysisResult | n
     canvas.height = h;
   }
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.clearRect(0, 0, w, h);
-  const waveH = h * 0.72;
-  const mid = waveH / 2;
-  if (!data) {
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.6;
-    ctx.fillRect(0, Math.round(mid), w, Math.max(1, dpr));
-    return;
-  }
-  const { waveform, buckets, bandMap, events, duration } = data;
-  let peakMax = 0;
-  for (let b = 0; b < buckets; b++) peakMax = Math.max(peakMax, waveform[b * 2]);
-  const norm = peakMax > 0 ? 1 / peakMax : 1;
-  const barW = Math.max(1, Math.floor(dpr));
-  const step = barW + (dpr >= 2 ? 1 : 0);
-  ctx.fillStyle = color;
-  for (let x = 0; x < w; x += step) {
-    const b0 = Math.floor((x / w) * buckets);
-    const b1 = Math.max(b0 + 1, Math.floor(((x + step) / w) * buckets));
-    let pk = 0;
-    let rms = 0;
-    for (let b = b0; b < b1 && b < buckets; b++) {
-      pk = Math.max(pk, waveform[b * 2]);
-      rms = Math.max(rms, waveform[b * 2 + 1]);
-    }
-    const ph = Math.max(dpr, pk * norm * mid * 0.95);
-    const rh = Math.max(dpr, rms * norm * mid * 1.3);
-    ctx.globalAlpha = 0.35;
-    ctx.fillRect(x, mid - ph, barW, ph * 2);
-    ctx.globalAlpha = 0.95;
-    ctx.fillRect(x, mid - rh, barW, rh * 2);
-  }
-  if (withBands) {
-    // three thin rows: bass / mid / high energy over time
-    const rowH = (h - waveH - 2 * dpr) / 3;
-    for (let band = 0; band < 3; band++) {
-      const y = waveH + 2 * dpr + band * rowH;
-      for (let x = 0; x < w; x += step) {
-        const b = Math.min(buckets - 1, Math.floor((x / w) * buckets));
-        ctx.globalAlpha = 0.08 + 0.8 * bandMap[b * 3 + band] ** 2;
-        ctx.fillRect(x, y, step, Math.max(1, rowH - dpr));
-      }
-    }
-  }
-  // kick markers along the top edge
-  ctx.fillStyle = markers;
-  ctx.globalAlpha = 0.7;
-  for (let i = 0; i < events.times.length; i++) {
-    if (events.types[i] !== EventType.KICK) continue;
-    const x = Math.round((events.times[i] / duration) * w);
-    ctx.fillRect(x, 0, Math.max(1, Math.floor(dpr)), 3 * dpr);
-  }
-  ctx.globalAlpha = 1;
+  if (ctx) drawWaveform(ctx, w, h, dpr, data, color, markers, true);
 }
 
 export function Timeline() {
@@ -82,7 +30,8 @@ export function Timeline() {
   const analysisStatus = usePlayer((s) => s.analysisStatus);
   const progress = usePlayer((s) => s.analysisProgress);
   const lastSeek = usePlayer((s) => s.lastSeek);
-  const accent = useSettings((s) => s.accent);
+  // the scene accent — the same colour as --accent and the exported player
+  const accent = useVisual((s) => String(s.scenes[s.sceneId]?.params.primary ?? '#d4ff3a'));
   const baseRef = useRef<HTMLCanvasElement>(null);
   const playedRef = useRef<HTMLCanvasElement>(null);
   const clipRef = useRef<HTMLDivElement>(null);
@@ -92,8 +41,8 @@ export function Timeline() {
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null);
 
   const redraw = useCallback(() => {
-    if (baseRef.current) drawWaveform(baseRef.current, analysis, 'rgba(236,236,230,0.55)', 'rgba(236,236,230,0.6)', true);
-    if (playedRef.current) drawWaveform(playedRef.current, analysis, accent, accent, true);
+    if (baseRef.current) paintWaveform(baseRef.current, analysis, WAVE_BASE, WAVE_MARKERS);
+    if (playedRef.current) paintWaveform(playedRef.current, analysis, accent, accent);
   }, [analysis, accent]);
 
   useEffect(() => {

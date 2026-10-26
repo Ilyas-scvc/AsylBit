@@ -2,10 +2,9 @@ import { useEffect, useRef } from 'react';
 import { engine, loadTestPattern, setVolume, toggleLoop, toggleMute, togglePlay } from '../audio/controller';
 import { usePlayer } from '../state/player';
 import { useNotice } from '../state/notice';
-import { formatKhz, formatTime, stripExtension } from './format';
+import { mappedStatus, playerSubLabel, playerTitle, timeLabels } from '../overlay/model';
 import { ExitFullscreenIcon, FullscreenIcon, LoopIcon, PauseIcon, PlayIcon, UploadIcon, VolumeIcon } from './icons';
 import { Timeline } from './Timeline';
-import { formatBytes } from '../audio/engine/fileValidation';
 
 export interface PlayerBarProps {
   onBrowse: () => void;
@@ -22,7 +21,7 @@ function LiveTime() {
     let last = '';
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      const text = formatTime(engine.currentTime, true);
+      const text = timeLabels(engine.currentTime, 0).now;
       if (text !== last && ref.current) {
         last = text;
         ref.current.textContent = text;
@@ -34,7 +33,7 @@ function LiveTime() {
   return (
     <span className="player-time" aria-label="Current time / duration">
       <span ref={ref}>00:00.0</span>
-      <span className="dim"> / {formatTime(duration, true)}</span>
+      <span className="dim">{timeLabels(0, duration).total}</span>
     </span>
   );
 }
@@ -46,13 +45,12 @@ function AnalysisLine() {
   const progress = usePlayer((s) => s.analysisProgress);
   const analysis = usePlayer((s) => s.analysis);
   if (!track) return null;
-  const parts = [track.extension.toUpperCase() || 'AUDIO', formatBytes(track.size)];
-  if (sampleRate) parts.push(formatKhz(sampleRate));
-  if (analysisStatus === 'decoding') parts.push('DECODING');
-  else if (analysisStatus === 'analyzing') parts.push(`ANALYZING ${Math.round(progress * 100)}%`);
-  else if (analysisStatus === 'ready' && analysis) parts.push(`MAPPED ${analysis.counts[0]}K/${analysis.counts[1]}S/${analysis.counts[2]}H`);
-  else if (analysisStatus === 'unavailable') parts.push('REAL-TIME ONLY');
-  return <span className="player-sub">{parts.join(' · ')}</span>;
+  let state: string | null = null;
+  if (analysisStatus === 'decoding') state = 'DECODING';
+  else if (analysisStatus === 'analyzing') state = `ANALYZING ${Math.round(progress * 100)}%`;
+  else if (analysisStatus === 'ready' && analysis) state = mappedStatus(analysis.counts);
+  else if (analysisStatus === 'unavailable') state = 'REAL-TIME ONLY';
+  return <span className="player-sub">{playerSubLabel(track.extension, track.size, sampleRate, state)}</span>;
 }
 
 export function PlayerBar({ onBrowse, onToggleFullscreen, isFullscreen, fullscreenSupported }: PlayerBarProps) {
@@ -99,7 +97,7 @@ export function PlayerBar({ onBrowse, onToggleFullscreen, isFullscreen, fullscre
       </button>
       <div className="player-meta">
         <span className="player-title" title={track?.name}>
-          {status === 'loading' ? 'LOADING…' : track ? stripExtension(track.name) : '—'}
+          {status === 'loading' ? 'LOADING…' : track ? playerTitle(track.name) : '—'}
         </span>
         <AnalysisLine />
       </div>
