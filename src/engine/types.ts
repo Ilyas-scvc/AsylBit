@@ -12,7 +12,8 @@ import type * as THREE from 'three';
 export type ParamValue = number | boolean | string;
 export type ParamValues = Record<string, ParamValue>;
 
-export type ParamGroup = 'geometry' | 'animation' | 'audio' | 'camera' | 'colors';
+/** 'disc' and 'artwork' only group the global disc settings (engine/disc/settings.ts). */
+export type ParamGroup = 'geometry' | 'animation' | 'audio' | 'camera' | 'colors' | 'disc' | 'artwork';
 export type ParamType = 'number' | 'boolean' | 'select' | 'color';
 
 export interface ParamOption {

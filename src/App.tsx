@@ -6,7 +6,10 @@ import { sceneRegistry } from './engine/scenes/registry';
 import { useStudio } from './export/studio';
 import { useNotice } from './state/notice';
 import { usePlayer } from './state/player';
-import { useUi } from './state/ui';
+import { useArtworkRestore } from './ui/DiscTab';
+import { loadArtwork, validateArtworkFile } from './state/artwork';
+import { useSettings } from './state/settings';
+import { appUiClasses, useUi } from './state/ui';
 import { selectScene, stepScene, useVisual } from './state/visual';
 import { ExportStatusBar } from './ui/ExportPanel';
 import { ExportStudio } from './ui/ExportStudio';
@@ -61,6 +64,8 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const hidden = useUi((s) => s.hidden);
+  const hideUiMode = useSettings((s) => s.hideUiMode);
+  useArtworkRestore();
   // with a track loaded, HIDE UI keeps a compact player (play, title, waveform, time)
   const hasTrack = usePlayer((s) => s.track !== null);
   const inspectorOpen = useUi((s) => s.inspectorOpen);
@@ -156,10 +161,15 @@ export default function App() {
         case 'KeyS':
           ui.toggleInspector();
           break;
+        case 'KeyC':
+          useVisual.getState().toggleDisc();
+          break;
         default:
-          if (/^Digit[1-9]$/.test(e.code)) {
+          if (/^Digit[0-9]$/.test(e.code)) {
+            // 1–9 → scenes 01–09, 0 → scene 10
             const list = sceneRegistry.list();
-            const i = Number(e.code.slice(-1)) - 1;
+            const d = Number(e.code.slice(-1));
+            const i = d === 0 ? 9 : d - 1;
             if (list[i]) selectScene(list[i].id);
           }
       }
@@ -206,6 +216,12 @@ export default function App() {
       setDragging(false);
       const files = Array.from(e.dataTransfer?.files ?? []);
       if (files.length === 0) return;
+      // an image (and no audio) goes onto the disc
+      const image = files.find((f) => validateArtworkFile(f) === null);
+      if (image && !files.some((f) => validateAudioFile(f).ok)) {
+        void loadArtwork(image).then((ok) => ok && useNotice.getState().show('ARTWORK PUT ON THE DISC — SEE INSPECTOR → DISC'));
+        return;
+      }
       const audio = files.find((f) => validateAudioFile(f).ok) ?? files[0];
       if (files.length > 1) useNotice.getState().show(`ONE FILE AT A TIME — LOADED ${audio.name.toUpperCase()}`);
       void loadFile(audio);
@@ -231,7 +247,7 @@ export default function App() {
   }, []);
 
   return (
-    <div ref={appRef} className={`app ${isFullscreen ? 'is-fullscreen' : ''} ${inspectorOpen ? 'settings-open' : ''} ${hidden ? 'ui-hidden' : ''}`}>
+    <div ref={appRef} className={`app ${isFullscreen ? 'is-fullscreen' : ''} ${inspectorOpen ? 'settings-open' : ''} ${appUiClasses(hidden, hideUiMode)}`}>
       <a className="skip chrome" href="#player">
         Skip to player
       </a>

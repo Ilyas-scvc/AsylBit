@@ -10,7 +10,7 @@ import { DEFAULT_SCENE_ID, LEGACY_MODE_SCENES, SceneRegistry, getScene, sceneReg
 import { SCENE_CATEGORIES, type SceneDefinition } from '../src/engine/types';
 
 describe('scene registry', () => {
-  it('registers the three original scenes and the six new ones, in order', () => {
+  it('registers the three original scenes, the six of 2.0 and SPINNING DISC, in order', () => {
     const ids = sceneRegistry.list().map((s) => s.id);
     expect(ids).toEqual([
       'pulse-object',
@@ -22,8 +22,9 @@ describe('scene registry', () => {
       'audio-tunnel',
       'plasma-flow',
       'fractal-bloom',
+      'spinning-disc',
     ]);
-    expect(sceneRegistry.list().map((s) => s.index)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09']);
+    expect(sceneRegistry.list().map((s) => s.index)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09', '10']);
     expect(sceneRegistry.has(DEFAULT_SCENE_ID)).toBe(true);
   });
 

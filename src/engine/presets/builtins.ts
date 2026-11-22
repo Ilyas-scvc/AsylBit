@@ -1,6 +1,7 @@
 /** Built-in presets: at least one starting point per scene, all original to BEAT//FORM. */
 import { createBinding, type ModulationBinding } from '../modulation';
 import { createEffect, type EffectInstance, type EffectType } from '../post/effects';
+import { defaultDiscSettings } from '../disc/settings';
 import { exampleZoomBinding, makePreset, type VisualPreset } from './schema';
 
 const T0 = Date.UTC(2026, 9, 1);
@@ -14,8 +15,16 @@ function mod(target: string, source: ModulationBinding['source'], patch: Partial
   return { ...createBinding(target, source, `m-${target.replace(/[^\w]+/g, '-')}-${source}`), ...patch };
 }
 
-function preset(id: string, name: string, sceneId: string, values: Record<string, number | string | boolean>, post: EffectInstance[] = [], modulations: ModulationBinding[] = []): VisualPreset {
-  return makePreset({ id: `builtin-${id}`, name, sceneId, values, post, modulations, builtIn: true, now: T0 });
+function preset(
+  id: string,
+  name: string,
+  sceneId: string,
+  values: Record<string, number | string | boolean>,
+  post: EffectInstance[] = [],
+  modulations: ModulationBinding[] = [],
+  disc?: Record<string, number | string | boolean>,
+): VisualPreset {
+  return makePreset({ id: `builtin-${id}`, name, sceneId, values, post, modulations, disc: disc && { ...defaultDiscSettings(), ...disc }, builtIn: true, now: T0 });
 }
 
 export const BUILTIN_PRESETS: VisualPreset[] = [
@@ -55,6 +64,21 @@ export const BUILTIN_PRESETS: VisualPreset[] = [
   preset('lava', 'LAVA', 'plasma-flow', {}, [fx('grain', 'fx-grain'), fx('vignette', 'fx-vignette')]),
   preset('aurora', 'AURORA', 'plasma-flow', { primary: '#3affb1', secondary: '#3a6bff', background: '#02060a', deformation: 1.3, trails: 1.1 }, [fx('vignette', 'fx-vignette')]),
   preset('bloom', 'BLOOM', 'fractal-bloom', {}, [fx('bloom', 'fx-bloom', { intensity: 0.9, threshold: 0.4 })]),
+  // the first SPINNING DISC preset carries no disc block: visiting the scene keeps the user's disc
+  preset('spin', 'SPIN', 'spinning-disc', {}, [fx('bloom', 'fx-bloom', { intensity: 0.45, threshold: 0.8 }), fx('vignette', 'fx-vignette')]),
+  preset('holo-spin', 'HOLO SPIN', 'spinning-disc', { primary: '#b8a6ff', secondary: '#3ad8ff', background: '#060509' }, [fx('bloom', 'fx-bloom', { intensity: 0.55, threshold: 0.75 })], [], {
+    style: 'holo',
+    tiltX: 22,
+    tiltY: -16,
+    glow: 0.8,
+  }),
+  preset('jewel', 'JEWEL CASE', 'spinning-disc', { haze: 0.45, primary: '#ffd9a8', secondary: '#7fb4ff' }, [fx('bloom', 'fx-bloom', { intensity: 0.4, threshold: 0.8 }), fx('grain', 'fx-grain')], [], {
+    style: 'dark',
+    jewelCase: true,
+    tiltX: 18,
+    tiltY: -22,
+    size: 1.1,
+  }),
   preset('crystal', 'CRYSTAL', 'fractal-bloom', { symmetry: 6, gradient: 'frequency', primary: '#ecece6', secondary: '#d4ff3a', complexity: 0.8, glow: 0.6 }, [
     fx('chromatic', 'fx-chroma', { amount: 0.2 }),
   ]),

@@ -6,6 +6,7 @@ import { useSettings } from '../../state/settings';
 import { useUi, type InspectorTab } from '../../state/ui';
 import { defaultSceneState, useVisual } from '../../state/visual';
 import { CloseIcon } from '../icons';
+import { DiscTab } from '../DiscTab';
 import { ParamControl } from './ParamControl';
 import { PresetsTab } from './PresetsTab';
 import { SystemTab } from './SystemTab';
@@ -13,6 +14,7 @@ import { liveProfile, useRuntime } from '../../visual/runtime';
 
 const TABS: { id: InspectorTab; label: string }[] = [
   { id: 'scene', label: 'SCENE' },
+  { id: 'disc', label: 'DISC' },
   { id: 'fx', label: 'FX' },
   { id: 'presets', label: 'PRESETS' },
   { id: 'system', label: 'SYSTEM' },
@@ -200,6 +202,7 @@ export function Inspector() {
       </header>
       <div className="settings-body" role="tabpanel">
         {tab === 'scene' && <SceneTab />}
+        {tab === 'disc' && <DiscTab />}
         {tab === 'fx' && <FxTab />}
         {tab === 'presets' && <PresetsTab />}
         {tab === 'system' && <SystemTab />}

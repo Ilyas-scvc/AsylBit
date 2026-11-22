@@ -3,8 +3,9 @@
  * Hiding the UI is purely presentational — it never touches playback or the WebGL context.
  */
 import { create } from 'zustand';
+import type { HideUiMode } from './settings';
 
-export type InspectorTab = 'scene' | 'fx' | 'presets' | 'system';
+export type InspectorTab = 'scene' | 'disc' | 'fx' | 'presets' | 'system';
 export type PreviewAspect = 'full' | '16:9' | '9:16' | '1:1';
 
 export const PREVIEW_ASPECTS: { id: PreviewAspect; label: string; ratio: number | null }[] = [
@@ -77,6 +78,15 @@ export const useUi = create<UiState>()((set, get) => ({
   setPreviewAspect: (a) => set({ previewAspect: a }),
   toggleSafeZones: () => set({ safeZones: !get().safeZones }),
 }));
+
+/**
+ * Classes of the app root for HIDE UI: `ui-hidden` removes the interface; with `ui-clean`
+ * (the default) the stage captions go too, leaving only the visualizer and the disc.
+ */
+export function appUiClasses(hidden: boolean, mode: HideUiMode): string {
+  if (!hidden) return '';
+  return mode === 'clean' ? 'ui-hidden ui-clean' : 'ui-hidden';
+}
 
 /**
  * Restore-button visibility while the UI is hidden: shown when the pointer is in the

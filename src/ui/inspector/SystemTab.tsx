@@ -1,5 +1,5 @@
 import { PERFORMANCE_PRESETS } from '../../engine/quality';
-import { useSettings, type ReducedMotionSetting } from '../../state/settings';
+import { useSettings, type HideUiMode, type ReducedMotionSetting } from '../../state/settings';
 import { livePixelRatio, useRuntime } from '../../visual/runtime';
 import { useSystemReducedMotion } from '../../visual/useReducedMotion';
 
@@ -22,6 +22,7 @@ export function SystemTab() {
   const performance = useSettings((s) => s.performance);
   const reducedMotion = useSettings((s) => s.reducedMotion);
   const fftSize = useSettings((s) => s.fftSize);
+  const hideUiMode = useSettings((s) => s.hideUiMode);
   const set = useSettings((s) => s.set);
   const systemReduced = useSystemReducedMotion();
   const fps = useRuntime((s) => s.fps);
@@ -65,6 +66,21 @@ export function SystemTab() {
           ]}
           onChange={(v) => set('fftSize', v)}
         />
+      </section>
+      <section className="set-section">
+        <h3>
+          <span className="dim">[03]</span> HIDE UI
+        </h3>
+        <Seg<HideUiMode>
+          label="KEEP ON SCREEN"
+          value={hideUiMode}
+          options={[
+            { value: 'clean', label: 'VISUALIZER ONLY', title: 'Only the visualizer and the disc stay' },
+            { value: 'captions', label: '+ CAPTIONS', title: 'Also keep the HUD, track title and compact player' },
+          ]}
+          onChange={(v) => set('hideUiMode', v)}
+        />
+        <p className="set-note dim">H HIDES THE INTERFACE; H, ESC OR THE SHOW UI BUTTON (TOP RIGHT, ON HOVER OR TAP) BRINGS IT BACK. VIDEO CAPTIONS ARE CHOSEN IN EXPORT STUDIO.</p>
       </section>
     </div>
   );

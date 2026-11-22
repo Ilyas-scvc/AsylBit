@@ -797,3 +797,81 @@ html.cursor-idle * {
     padding: 10px;
   }
 }
+
+/* spinning disc ----------------------------------------------------------- */
+/* HIDE UI, default mode: only the visualizer and the disc stay (no captions, no player) */
+.app.ui-hidden.ui-clean .hud,
+.app.ui-hidden.ui-clean .hero-title,
+.app.ui-hidden.ui-clean .player-dock,
+.app.ui-hidden.ui-clean .player-dock.has-track {
+  display: none !important;
+}
+.btn-disc {
+  color: var(--fg-dim);
+}
+.btn-disc::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  flex: none;
+}
+.btn-disc.is-on {
+  background: transparent;
+  border-color: var(--fg);
+  color: var(--fg);
+}
+.btn-disc.is-on::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ins-disc .art-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.art-panel {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 4px 0 12px;
+}
+.art-preview {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  overflow: hidden;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 8px;
+  background: repeating-conic-gradient(var(--line) 0 25%, transparent 0 50%) 0 0 / 12px 12px;
+}
+.art-preview.has-art {
+  padding: 0;
+}
+.art-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.art-side .art-actions {
+  margin-top: 0;
+}
+.art-name {
+  overflow-wrap: anywhere;
+}
+.art-error {
+  color: var(--accent);
+}
+@media (max-width: 760px) {
+  /* phones: the disc toggle is just its status dot */
+  .btn-disc {
+    gap: 0;
+  }
+}

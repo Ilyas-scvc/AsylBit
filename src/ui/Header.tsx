@@ -1,4 +1,6 @@
+import { discVisible } from '../engine/disc/settings';
 import { useUi } from '../state/ui';
+import { useVisual } from '../state/visual';
 import { SettingsIcon } from './icons';
 
 export function Header() {
@@ -7,6 +9,8 @@ export function Header() {
   const setBrowser = useUi((s) => s.setBrowser);
   const setExport = useUi((s) => s.setExport);
   const hideUi = useUi((s) => s.hideUi);
+  const discOn = useVisual((s) => discVisible(s.sceneId, s.disc));
+  const toggleDisc = useVisual((s) => s.toggleDisc);
   return (
     <header className="header">
       <a className="logo" href="#top" aria-label="BEAT//FORM — top">
@@ -32,6 +36,9 @@ export function Header() {
         <button type="button" className="btn" onClick={() => setExport(true)} title="Export studio (E)">
           <span className="label">EXPORT</span>
           <span className="label-short">REC</span>
+        </button>
+        <button type="button" className={`btn btn-disc ${discOn ? 'is-on' : ''}`} onClick={toggleDisc} aria-pressed={discOn} title="Toggle disc (C)" aria-label="Toggle disc">
+          <span className="label">DISC</span>
         </button>
         <button type="button" className="btn btn-hide" onClick={hideUi} title="Hide UI (H)" aria-label="Hide UI">
           <span className="label">HIDE UI</span>

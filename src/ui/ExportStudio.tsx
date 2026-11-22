@@ -30,6 +30,7 @@ import {
 } from '../export/plan';
 import type { RenderPhase } from '../export/RenderController';
 import { cancelExport, discardResult, exportReducedMotion, onExportPreview, overlayForExport, snapshotForExport, startExport, useStudio } from '../export/studio';
+import { currentArtwork } from '../state/artwork';
 import { usePlayer } from '../state/player';
 import { useSettings } from '../state/settings';
 import { useUi } from '../state/ui';
@@ -214,6 +215,7 @@ export function ExportStudio() {
           eventMap: analysis?.events ?? null,
           visual,
           overlay: captions === 'on' ? overlayForExport(visual) : null,
+          artwork: currentArtwork(),
           quality: qualityProfile(detail),
           fftSize: useSettings.getState().fftSize,
           reducedMotion: exportReducedMotion(),

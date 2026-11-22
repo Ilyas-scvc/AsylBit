@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { engine as audioEngine, getCurrentFile } from '../audio/controller';
 import { qualityProfile } from '../engine/quality';
 import type { PerformancePreset } from '../engine/types';
+import { currentArtwork } from '../state/artwork';
 import { usePlayer } from '../state/player';
 import { resolveReducedMotion, useSettings } from '../state/settings';
 import { useVisual, visualSnapshot } from '../state/visual';
@@ -137,6 +138,7 @@ export async function startExport(spec: ExportSpec, detail: PerformancePreset, t
         eventMap: usePlayer.getState().analysis?.events ?? null,
         visual,
         overlay: captions ? overlayForExport(visual) : null,
+        artwork: currentArtwork(),
         quality: qualityProfile(detail),
         fftSize: useSettings.getState().fftSize,
         reducedMotion: exportReducedMotion(),

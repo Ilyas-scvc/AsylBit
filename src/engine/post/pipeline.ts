@@ -258,6 +258,12 @@ void main() {
 }
 `;
 
+/** A second scene (own camera) drawn over the main one after its effects, before the grade. */
+export interface OverlayLayer {
+  scene: THREE.Scene;
+  camera: THREE.Camera;
+}
+
 export interface GradeSettings {
   brightness: number;
   contrast: number;
@@ -426,7 +432,18 @@ export class PostProcessingPipeline {
     return effects.length === 0 && grade.brightness === 1 && grade.contrast === 1 && grade.saturation === 1 && grade.fade >= 1 && this.quality.postScale === 1;
   }
 
-  render(scene: THREE.Scene, camera: THREE.Camera, effects: EffectInstance[], grade: GradeSettings, frame: PostFrame): void {
+  /** Draw `layer` (its own scene + camera, e.g. the disc) over what is already in the target. */
+  private renderLayer(layer: OverlayLayer | undefined): void {
+    if (!layer) return;
+    const r = this.renderer;
+    const auto = r.autoClear;
+    r.autoClear = false;
+    r.clearDepth();
+    r.render(layer.scene, layer.camera);
+    r.autoClear = auto;
+  }
+
+  render(scene: THREE.Scene, camera: THREE.Camera, effects: EffectInstance[], grade: GradeSettings, frame: PostFrame, layer?: OverlayLayer): void {
     const r = this.renderer;
     if (this.isDirect(effects, grade)) {
       // no effect renders: release what the last ones kept (trail histories, spin angles)
@@ -434,6 +451,7 @@ export class PostProcessingPipeline {
       if (this.kaleido.size) this.kaleido.clear();
       r.setRenderTarget(null);
       r.render(scene, camera);
+      this.renderLayer(layer);
       return;
     }
     const needBloom = effects.some((e) => e.type === 'bloom');
@@ -582,6 +600,17 @@ export class PostProcessingPipeline {
           break;
         }
       }
+    }
+
+    // the layer (the disc) goes on top of the scene's effects — bloom, trails or a kaleidoscope
+    // never smear or duplicate it — but under the grade, so it fades and grades with the scene
+    if (layer) {
+      const dst = next();
+      this.mats.copy.uniforms.tSrc.value = src;
+      this.pass(this.mats.copy, dst);
+      r.setRenderTarget(dst);
+      this.renderLayer(layer);
+      src = dst.texture;
     }
 
     const o = this.mats.output.uniforms;

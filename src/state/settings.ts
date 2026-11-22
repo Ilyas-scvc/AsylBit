@@ -9,6 +9,8 @@ import type { PerformancePreset } from '../engine/types';
 export type VisualMode = 'pulse' | 'radial' | 'wave';
 export type ReducedMotionSetting = 'auto' | 'on' | 'off';
 export type QualitySetting = 'auto' | 'high' | 'low';
+/** HIDE UI: only the visualizer (and the disc), or also the stage captions (HUD, title, player) */
+export type HideUiMode = 'clean' | 'captions';
 
 export interface VisualSettings {
   mode: VisualMode;
@@ -27,6 +29,7 @@ export interface VisualSettings {
   quality: QualitySetting;
   /** live-stage performance preset (BEAT//FORM 2.0) */
   performance: PerformancePreset;
+  hideUiMode: HideUiMode;
 }
 
 export type NumericSettingKey =
@@ -81,6 +84,7 @@ export const DEFAULT_SETTINGS: VisualSettings = {
   fftSize: 2048,
   quality: 'auto',
   performance: 'balanced',
+  hideUiMode: 'clean',
 };
 
 const STORAGE_KEY = 'beatform.settings.v1';
@@ -107,6 +111,7 @@ export function sanitizeSettings(raw: unknown): VisualSettings {
   if (src.fftSize === 2048 || src.fftSize === 4096) out.fftSize = src.fftSize;
   if (src.quality === 'auto' || src.quality === 'high' || src.quality === 'low') out.quality = src.quality;
   out.performance = isPerformancePreset(src.performance) ? src.performance : presetFromLegacyQuality(src.quality);
+  if (src.hideUiMode === 'clean' || src.hideUiMode === 'captions') out.hideUiMode = src.hideUiMode;
   return out;
 }
 

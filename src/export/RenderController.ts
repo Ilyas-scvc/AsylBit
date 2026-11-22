@@ -30,6 +30,7 @@ import { AnalysisHub } from '../audio/analysis/AnalysisHub';
 import type { EventMap } from '../audio/dsp/events';
 import { getScene } from '../engine/scenes/registry';
 import { VisualizerEngine, type VisualSnapshot } from '../engine/VisualizerEngine';
+import type { DiscArtwork } from '../engine/disc/settings';
 import type { OverlayFrame } from '../overlay/model';
 import { createOverlayPainter, loadOverlayFonts, type OverlayContent } from '../overlay/painter';
 import type { QualityProfile } from '../engine/types';
@@ -63,6 +64,8 @@ export interface RenderJob {
   memoryLimitBytes?: number;
   /** draw the HUD, track title and player into every frame (null / absent: the scene only) */
   overlay?: OverlayContent | null;
+  /** the image on the spinning disc (the disc settings travel in `visual.disc`) */
+  artwork?: DiscArtwork | null;
 }
 
 /** Caption values of one export frame — only from this export's own objects. */
@@ -267,6 +270,7 @@ export class RenderController {
       canvas.height = spec.height;
       engine = new VisualizerEngine(canvas, { quality: this.job.quality, preserveDrawingBuffer: true, sceneFade: 0 });
       engine.setSize(spec.width, spec.height, 1);
+      engine.setArtwork(this.job.artwork ?? null);
       const eng = engine;
       // the frame the encoder receives: the scene alone, or scene + captions
       const composer = this.job.overlay ? await createComposer(canvas, spec.width, spec.height, this.job.overlay, visual.sceneId) : null;
@@ -488,6 +492,7 @@ export async function renderStill(
   canvas.height = spec.height;
   const engine = new VisualizerEngine(canvas, { quality: job.quality, preserveDrawingBuffer: true, sceneFade: 0 });
   engine.setSize(spec.width, spec.height, 1);
+  engine.setArtwork(job.artwork ?? null);
   const hub = new AnalysisHub();
   hub.setExportMode(true);
   hub.setTuning({

@@ -14,6 +14,7 @@ import type { ExportSpec } from '../src/export/plan';
 import { frameTime, preRollStart } from '../src/export/plan';
 import { OutputLimitError, TransactionalFileSink, type WriteChunk } from '../src/export/sinks';
 import { getScene } from '../src/engine/scenes/registry';
+import { defaultDiscSettings } from '../src/engine/disc/settings';
 import { readoutLabel, timeLabels, type OverlayFrame } from '../src/overlay/model';
 import { layoutOverlay, type FontSpec, type OverlayContent } from '../src/overlay/painter';
 import { recordingContext, type DrawCall } from './helpers';
@@ -42,6 +43,9 @@ interface Log {
   sourceCanvas: unknown;
   /** simulated encoder time per frame */
   slowEncodeMs: number;
+  /** artwork given to the engine before the first frame, and the visual it rendered */
+  artwork: unknown[];
+  visuals: unknown[];
 }
 const log: Log = {} as Log;
 
@@ -64,6 +68,8 @@ function resetLog() {
     closedStreams: 0,
     sourceCanvas: null,
     slowEncodeMs: 0,
+    artwork: [],
+    visuals: [],
   });
 }
 
@@ -205,8 +211,12 @@ vi.mock('../src/engine/VisualizerEngine', () => ({
     get telemetry() {
       return { rotation: (this.steps * 2.5) % 360, tilt: -4.5 };
     }
-    render(input: { skipRender?: boolean }) {
+    setArtwork(art: unknown) {
+      log.artwork.push(art);
+    }
+    render(input: { skipRender?: boolean; visual?: unknown }) {
       this.steps++;
+      if (log.renders === 0 && log.visuals.length === 0) log.visuals.push(input.visual);
       if (!input.skipRender) log.renders++;
     }
     dispose() {
@@ -637,5 +647,30 @@ describe('RenderController — captions drawn into every frame', () => {
     await new RenderController(job()).run();
     expect(log.sourceCanvas).toBe(sceneCanvas(canvases));
     expect(frameCanvas(canvases)).toBeUndefined();
+  });
+});
+
+describe('RenderController — the spinning disc in exports', () => {
+  const artwork = { id: 'art-7', source: { width: 64, height: 64 } as unknown as HTMLCanvasElement, width: 64, height: 64 };
+  const disc = { ...defaultDiscSettings(), overlay: true, style: 'neon', jewelCase: true };
+
+  it('gives the export engine the artwork and the disc settings before the first frame', async () => {
+    const j = job({ end: 3.95 });
+    await new RenderController({ ...j, visual: { ...j.visual, disc }, artwork }).run();
+    expect(log.artwork).toEqual([artwork]);
+    expect((log.visuals[0] as { disc: unknown }).disc).toEqual(disc);
+  });
+
+  it('without artwork the export shows the procedural disc', async () => {
+    await new RenderController({ ...job({ end: 3.95 }), visual: { ...job().visual, disc } }).run();
+    expect(log.artwork).toEqual([null]);
+  });
+
+  it('RENDER PREVIEW FRAME uses the same artwork and disc', async () => {
+    const j = job();
+    const target = { width: 64, height: 36, getContext: () => null } as unknown as HTMLCanvasElement;
+    await renderStill({ ...j, visual: { ...j.visual, disc }, artwork }, 3.5, target);
+    expect(log.artwork).toEqual([artwork]);
+    expect((log.visuals[0] as { disc: unknown }).disc).toEqual(disc);
   });
 });

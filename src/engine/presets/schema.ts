@@ -2,12 +2,13 @@
  * Preset format (schema v2), migration and safe (de)serialisation.
  *
  * A preset is a complete look: scene id, scene parameters, colours, camera, modulation
- * bindings and the post-processing stack. Everything that comes from outside (storage,
+ * bindings, the post-processing stack and (optionally) the spinning-disc settings. Everything that comes from outside (storage,
  * imported JSON, share links) goes through `migratePreset`, which upgrades older schemas,
  * rejects newer ones and clamps every value — a tampered preset can never put the engine
  * into an invalid state.
  */
 import { createBinding, sanitizeBinding, type ModulationBinding } from '../modulation';
+import { DISC_PARAMS, sanitizeDisc } from '../disc/settings';
 import { getSceneSchema, sanitizeParams } from '../params';
 import { EFFECT_MAP, sanitizeStack, type EffectInstance } from '../post/effects';
 import { DEFAULT_SCENE_ID, LEGACY_MODE_SCENES, getScene, sceneRegistry } from '../scenes/registry';
@@ -43,6 +44,11 @@ export interface VisualPreset {
   camera: ParamValues;
   modulations: ModulationBinding[];
   post: EffectInstance[];
+  /**
+   * Disc and artwork settings (engine/disc/settings.ts). Optional: presets without it leave
+   * the current disc as it is. The artwork image itself is never part of a preset.
+   */
+  disc?: ParamValues;
 }
 
 export type MigrationResult = { ok: true; preset: VisualPreset; migratedFrom: number } | { ok: false; error: string };
@@ -81,6 +87,7 @@ export function makePreset(input: {
   values: ParamValues;
   modulations?: ModulationBinding[];
   post?: EffectInstance[];
+  disc?: ParamValues;
   name?: string;
   id?: string;
   builtIn?: boolean;
@@ -99,6 +106,7 @@ export function makePreset(input: {
     ...splitParams(sceneId, sanitizeParams(getSceneSchema(getScene(sceneId)), input.values)),
     modulations: (input.modulations ?? []).slice(0, MAX_MODULATIONS),
     post: input.post ?? [],
+    ...(input.disc ? { disc: sanitizeDisc(input.disc) } : {}),
   };
 }
 
@@ -110,6 +118,8 @@ function validTargets(sceneId: string, post: EffectInstance[]): Set<string> {
   }
   return set;
 }
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 function sanitizeV2(r: Record<string, unknown>, now: number): VisualPreset {
   const sceneId = typeof r.sceneId === 'string' && sceneRegistry.has(r.sceneId) ? r.sceneId : DEFAULT_SCENE_ID;
@@ -140,6 +150,7 @@ function sanitizeV2(r: Record<string, unknown>, now: number): VisualPreset {
     ...splitParams(sceneId, values),
     modulations,
     post,
+    ...(isRecord(r.disc) ? { disc: sanitizeDisc(r.disc) } : {}),
   };
 }
 
@@ -231,7 +242,7 @@ export function presetBackupFiles(presets: VisualPreset[], limitBytes = MAX_IMPO
 
 /** Content of a preset without its identity, to recognise one that is already in a library. */
 export function presetFingerprint(p: VisualPreset): string {
-  return JSON.stringify([p.name, p.sceneId, presetValues(p), p.modulations, p.post]);
+  return JSON.stringify([p.name, p.sceneId, presetValues(p), p.modulations, p.post, p.disc ?? null]);
 }
 
 // ---- share links ---------------------------------------------------------------------------
@@ -251,7 +262,9 @@ function fromBase64Url(s: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-/** Compact share payload: only values that differ from the scene defaults. Never contains audio. */
+const DISC_DEFAULTS = Object.fromEntries(DISC_PARAMS.map((d) => [d.key, d.default]));
+
+/** Compact share payload: only values that differ from the scene defaults. Never contains audio or artwork. */
 export function encodePresetForUrl(p: VisualPreset): string {
   const defaults = Object.fromEntries(getSceneSchema(getScene(p.sceneId)).map((d) => [d.key, d.default]));
   const diff = (section: ParamValues) => Object.fromEntries(Object.entries(section).filter(([k, v]) => defaults[k] !== v));
@@ -264,6 +277,7 @@ export function encodePresetForUrl(p: VisualPreset): string {
     camera: diff(p.camera),
     modulations: p.modulations,
     post: p.post,
+    ...(p.disc ? { disc: Object.fromEntries(Object.entries(p.disc).filter(([k, v]) => DISC_DEFAULTS[k] !== v)) } : {}),
   };
   const encoded = toBase64Url(JSON.stringify(payload));
   if (encoded.length > MAX_URL_PAYLOAD) throw new Error('PRESET TOO LARGE FOR A LINK — EXPORT JSON INSTEAD');

@@ -1,9 +1,11 @@
 /**
  * Working visual state: the active scene, per-scene parameters and modulation bindings,
- * and the post-processing stack. Persisted locally (sanitised on load). A preset is a
- * snapshot of this state; loading a preset replaces it.
+ * the post-processing stack and the (global) spinning-disc settings. Persisted locally
+ * (sanitised on load). A preset is a snapshot of this state; loading a preset replaces it —
+ * the disc only when the preset carries disc settings.
  */
 import { create } from 'zustand';
+import { defaultDiscSettings, sanitizeDisc, setDiscValue, toggleDisc } from '../engine/disc/settings';
 import { createBinding, sanitizeBinding, type ModulationBinding, type ModSource } from '../engine/modulation';
 import { defaultParams, getSceneSchema, sanitizeParam, sanitizeParams } from '../engine/params';
 import { createEffect, EFFECT_MAP, MAX_STACK, moveEffect, sanitizeStack, type EffectInstance, type EffectType } from '../engine/post/effects';
@@ -21,6 +23,8 @@ interface VisualData {
   sceneId: string;
   scenes: Record<string, SceneState>;
   post: EffectInstance[];
+  /** disc + artwork settings, shared by SCENE 10 and the overlay over other scenes */
+  disc: ParamValues;
   presetId: string | null;
   presetName: string | null;
   dirty: boolean;
@@ -41,6 +45,11 @@ interface VisualActions {
   removeEffect: (id: string) => void;
   loadPreset: (preset: VisualPreset) => void;
   snapshot: (name?: string) => VisualPreset;
+  setDiscParam: (key: string, value: ParamValue) => void;
+  resetDiscParam: (key: string) => void;
+  resetDisc: () => void;
+  /** TOGGLE DISC (C): hide the disc where it shows, otherwise show it (as an overlay off SCENE 10) */
+  toggleDisc: () => void;
 }
 
 export type VisualStore = VisualData & VisualActions;
@@ -72,17 +81,19 @@ export function sanitizeVisualData(raw: unknown): VisualData {
     sceneId,
     scenes,
     post,
+    disc: sanitizeDisc(r.disc),
     presetId: typeof r.presetId === 'string' ? r.presetId.slice(0, 80) : null,
     presetName: typeof r.presetName === 'string' ? r.presetName.slice(0, 60) : null,
     dirty: r.dirty === true,
   };
 }
 
-function fromPreset(p: VisualPreset): VisualData {
+function fromPreset(p: VisualPreset, disc: ParamValues = defaultDiscSettings()): VisualData {
   return {
     sceneId: p.sceneId,
     scenes: { [p.sceneId]: { params: presetValues(p), modulations: p.modulations.map((m) => ({ ...m })) } },
     post: p.post.map((e) => ({ ...e, params: { ...e.params } })),
+    disc: p.disc ? sanitizeDisc(p.disc) : disc,
     presetId: p.id,
     presetName: p.name,
     dirty: false,
@@ -193,7 +204,7 @@ export const useVisual = create<VisualStore>()((set, get) => {
       })),
 
     loadPreset: (preset) => set((s) => {
-      const data = fromPreset(preset);
+      const data = fromPreset(preset, s.disc);
       // keep edits of other scenes; the preset's scene is replaced
       return { ...data, scenes: { ...s.scenes, ...data.scenes } };
     }),
@@ -201,8 +212,13 @@ export const useVisual = create<VisualStore>()((set, get) => {
     snapshot: (name) => {
       const s = get();
       const st = current();
-      return makePreset({ sceneId: s.sceneId, values: st.params, modulations: st.modulations, post: s.post, name: name ?? s.presetName ?? 'UNTITLED' });
+      return makePreset({ sceneId: s.sceneId, values: st.params, modulations: st.modulations, post: s.post, disc: s.disc, name: name ?? s.presetName ?? 'UNTITLED' });
     },
+
+    setDiscParam: (key, value) => set((s) => ({ disc: setDiscValue(s.disc, key, value), dirty: true })),
+    resetDiscParam: (key) => set((s) => ({ disc: setDiscValue(s.disc, key, defaultDiscSettings()[key]), dirty: true })),
+    resetDisc: () => set((s) => ({ disc: { ...defaultDiscSettings(), enabled: s.disc.enabled, overlay: s.disc.overlay }, dirty: true })),
+    toggleDisc: () => set((s) => ({ disc: toggleDisc(s.sceneId, s.disc), dirty: true })),
   };
 });
 
@@ -229,9 +245,9 @@ export function stepScene(delta: number): void {
 }
 
 /** Snapshot for the render loop (no allocation when nothing changed). */
-export function visualSnapshot(s: VisualStore): { sceneId: string; params: ParamValues; modulations: ModulationBinding[]; post: EffectInstance[] } {
+export function visualSnapshot(s: VisualStore): { sceneId: string; params: ParamValues; modulations: ModulationBinding[]; post: EffectInstance[]; disc: ParamValues } {
   const st = s.scenes[s.sceneId] ?? defaultSceneState(s.sceneId);
-  return { sceneId: s.sceneId, params: st.params, modulations: st.modulations, post: s.post };
+  return { sceneId: s.sceneId, params: st.params, modulations: st.modulations, post: s.post, disc: s.disc };
 }
 
 let saveTimer: number | undefined;
@@ -240,8 +256,8 @@ if (typeof window !== 'undefined') {
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       try {
-        const { sceneId, scenes, post, presetId, presetName, dirty } = s;
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ sceneId, scenes, post, presetId, presetName, dirty }));
+        const { sceneId, scenes, post, disc, presetId, presetName, dirty } = s;
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ sceneId, scenes, post, disc, presetId, presetName, dirty }));
       } catch {
         /* storage unavailable */
       }

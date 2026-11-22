@@ -10,6 +10,7 @@ import { analysisHub } from '../audio/analysis/AnalysisHub';
 import { VisualizerEngine } from '../engine/VisualizerEngine';
 import { useSettings } from '../state/settings';
 import { useVisual, visualSnapshot } from '../state/visual';
+import { useArtwork } from '../state/artwork';
 import { setLiveEngine } from './liveEngine';
 import { ContextLossMonitor, FrameGovernor, fallBackTo2D, liveProfile, livePixelRatio, setStageCanvas, useRuntime } from './runtime';
 import { telemetry } from './telemetry';
@@ -35,6 +36,11 @@ export default function WebGLStage({ active }: { active: boolean }) {
     }
     setStageCanvas(canvas);
     setLiveEngine(engine);
+    // the disc artwork: replacing / removing it frees the previous texture
+    engine.setArtwork(useArtwork.getState().artwork);
+    const unsubArtwork = useArtwork.subscribe((s, prev) => {
+      if (s.artwork !== prev.artwork) engine.setArtwork(s.artwork);
+    });
     canvas.setAttribute('aria-hidden', 'true');
 
     const resize = () => {
@@ -125,6 +131,7 @@ export default function WebGLStage({ active }: { active: boolean }) {
       ro.disconnect();
       unsubSettings();
       unsubRuntime();
+      unsubArtwork();
       monitor.dispose();
       canvas.removeEventListener('webglcontextlost', onLost);
       canvas.removeEventListener('webglcontextrestored', onRestored);

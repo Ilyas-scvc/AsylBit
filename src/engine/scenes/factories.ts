@@ -11,6 +11,7 @@ import { create as plasmaFlow } from './plasmaFlow';
 import { create as pulseObject } from './pulseObject';
 import { create as radialSpectrum } from './radialSpectrum';
 import { create as reactiveMesh } from './reactiveMesh';
+import { create as spinningDisc } from './spinningDisc';
 import { create as waveField } from './waveField';
 
 export const SCENE_FACTORIES: Readonly<Record<string, SceneFactory>> = {
@@ -23,4 +24,5 @@ export const SCENE_FACTORIES: Readonly<Record<string, SceneFactory>> = {
   'audio-tunnel': audioTunnel,
   'plasma-flow': plasmaFlow,
   'fractal-bloom': fractalBloom,
+  'spinning-disc': spinningDisc,
 };

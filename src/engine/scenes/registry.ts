@@ -14,6 +14,7 @@ import { plasmaFlow } from './defs/plasmaFlow';
 import { pulseObject } from './defs/pulseObject';
 import { radialSpectrum } from './defs/radialSpectrum';
 import { reactiveMesh } from './defs/reactiveMesh';
+import { spinningDisc } from './defs/spinningDisc';
 import { waveField } from './defs/waveField';
 
 export class SceneRegistry {
@@ -45,7 +46,7 @@ export class SceneRegistry {
 }
 
 export const sceneRegistry = new SceneRegistry();
-for (const def of [pulseObject, radialSpectrum, waveField, reactiveMesh, cosmicRings, particleCloud, audioTunnel, plasmaFlow, fractalBloom]) {
+for (const def of [pulseObject, radialSpectrum, waveField, reactiveMesh, cosmicRings, particleCloud, audioTunnel, plasmaFlow, fractalBloom, spinningDisc]) {
   sceneRegistry.register(def);
 }
 

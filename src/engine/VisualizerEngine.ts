@@ -5,7 +5,8 @@
  *     → AudioFeatureProvider (scene audio settings)
  *     → ModulationEngine (resolved parameters)
  *     → SceneController.update (scene sets uniforms / camera)
- *     → PostProcessingPipeline (effects + grade) → canvas
+ *     → DiscLayer.update (the spinning disc, when SCENE 10 or its overlay shows it)
+ *     → PostProcessingPipeline (scene → effects → disc on top → grade) → canvas
  *
  * The same class drives the live stage (visible canvas, rAF loop) and the offline video
  * renderer (dedicated canvas at the export resolution, fixed dt). Nothing here reads the
@@ -15,6 +16,8 @@ import * as THREE from 'three';
 import type { AudioFrame } from '../audio/analysis/frame';
 import { resetCamera } from './camera';
 import { GRADIENT_INDEX, HexColor } from './colors';
+import { DiscLayer } from './disc/DiscLayer';
+import { defaultDiscSettings, discVisible, DISC_SCENE_ID, type DiscArtwork } from './disc/settings';
 import type { AudioFeatureProvider } from './features';
 import type { ModulationBinding, ModulationEngine } from './modulation';
 import { getSceneSchema, schemaMap } from './params';
@@ -32,7 +35,11 @@ export interface VisualSnapshot {
   params: ParamValues;
   modulations: readonly ModulationBinding[];
   post: readonly EffectInstance[];
+  /** global disc settings (engine/disc/settings.ts); absent: the defaults */
+  disc?: ParamValues;
 }
+
+const DEFAULT_DISC = defaultDiscSettings();
 
 export interface EngineFrameInput {
   frame: AudioFrame;
@@ -114,6 +121,10 @@ export class VisualizerEngine {
   private readonly hex = { primary: new HexColor(), secondary: new HexColor(), background: new HexColor() };
   private schemaFor: SceneDefinition | null = null;
   private defs = new Map<string, ParamDef>();
+  /** created the first time a disc is shown */
+  private discLayer: DiscLayer | null = null;
+  private discShown = false;
+  private artwork: DiscArtwork | null = null;
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options: EngineOptions) {
     this.quality = options.quality;
@@ -157,9 +168,21 @@ export class VisualizerEngine {
     if (rebuild) this.controller.rebuild(q);
   }
 
+  /** The image on the disc (null: the procedural disc). Textures of replaced images are freed. */
+  setArtwork(art: DiscArtwork | null): void {
+    this.artwork = art;
+    this.discLayer?.setArtwork(art);
+  }
+
+  /** The disc renderer, once a disc has been shown (tests / diagnostics). */
+  get disc(): DiscLayer | null {
+    return this.discLayer;
+  }
+
   /** Reset all accumulated state (exports start from here). */
   reset(): void {
     this.clock = 0;
+    this.discLayer?.reset();
     this.resolver.reset();
     this.post.resetHistory();
     this.controller.rebuild(this.quality);
@@ -225,6 +248,16 @@ export class VisualizerEngine {
     };
     instance.update(ctx);
 
+    const disc = visual.disc ?? DEFAULT_DISC;
+    this.discShown = discVisible(visual.sceneId, disc);
+    if (this.discShown) {
+      if (!this.discLayer) {
+        this.discLayer = new DiscLayer(this.quality.detail === 'high' ? 160 : 96);
+        this.discLayer.setArtwork(this.artwork);
+      }
+      this.discLayer.update({ dt, clock: this.clock, audio, palette: this.palette, width: this.width, height: this.height, settings: disc, reducedMotion: input.reducedMotion });
+    }
+
     if (this.sceneFade > 0 && this.fade < 1) this.fade = Math.min(1, this.fade + dt / this.sceneFade);
     if (input.skipRender) return;
     this.post.render(
@@ -238,10 +271,13 @@ export class VisualizerEngine {
         fade: this.fade * this.fade * (3 - 2 * this.fade),
       },
       { time: input.time, clock: this.clock, dt, kick: audio.kick },
+      this.discShown && this.discLayer ? this.discLayer : undefined,
     );
   }
 
+  /** HUD readout: the disc's spin on SCENE 10, otherwise the scene's own. */
   get telemetry(): { rotation: number; tilt: number } | undefined {
+    if (this.discShown && this.discLayer && this.controller.def?.id === DISC_SCENE_ID) return this.discLayer.telemetry;
     return this.controller.instance?.telemetry;
   }
 
@@ -263,6 +299,8 @@ export class VisualizerEngine {
 
   dispose(): void {
     this.controller.dispose();
+    this.discLayer?.dispose();
+    this.discLayer = null;
     this.post.dispose();
     this.renderer.dispose();
   }
